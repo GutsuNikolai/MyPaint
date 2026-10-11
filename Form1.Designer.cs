@@ -162,7 +162,7 @@ partial class Form1
             Minimum = 1, Maximum = 100, Value = brushWidth, Width = 65,
             BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(3, 6, 3, 0)
         };
-        widthSlider = new()
+        widthSlider = new ThemedTrackBar
         {
             Minimum = 1, Maximum = 100, Value = brushWidth, Width = 220,
             AutoSize = false, Height = 38, TickStyle = TickStyle.None, BackColor = UiTheme.Background,
