@@ -19,6 +19,7 @@ internal sealed class TextOptionsForm : Form
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Controls.Add(content);
+        UiTheme.Apply(this);
         ResumeLayout(true);
     }
 

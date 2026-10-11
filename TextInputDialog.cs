@@ -71,6 +71,8 @@ internal sealed class TextInputDialog : Form
         Controls.Add(layout);
         AcceptButton = insertButton;
         CancelButton = cancelButton;
+        insertButton.Tag = "primary";
+        UiTheme.Apply(this);
         Shown += (_, _) => textInput.Focus();
         ResumeLayout(true);
     }

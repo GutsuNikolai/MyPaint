@@ -6,7 +6,7 @@ partial class Form1
     private System.ComponentModel.IContainer? components;
     private PictureBox canvasPictureBox = null!;
     private Panel canvasPanel = null!;
-    private Button colorButton = null!;
+    private ColorSampleButton colorButton = null!;
     private ToolStripButton undoButton = null!;
     private ToolStripButton redoButton = null!;
     private ToolStripMenuItem undoMenuItem = null!;
@@ -23,8 +23,9 @@ partial class Form1
     private ComboBox textFontComboBox = null!;
     private ComboBox textHorizontalComboBox = null!;
     private ComboBox textVerticalComboBox = null!;
-    private Button textColorButton = null!;
-    private Button textBackgroundButton = null!;
+    private ColorSampleButton textColorButton = null!;
+    private ColorSampleButton textBackgroundButton = null!;
+    private readonly List<Image> toolbarImages = new();
     private ToolStripStatusLabel toolStatusLabel = null!;
     private ToolStripStatusLabel colorStatusLabel = null!;
     private ToolStripStatusLabel widthStatusLabel = null!;
@@ -49,6 +50,8 @@ partial class Form1
             textOptionsWindow?.Dispose();
             textFonts.Dispose();
             documentTabFont?.Dispose();
+            foreach (Image image in toolbarImages) image.Dispose();
+            toolbarImages.Clear();
         }
         base.Dispose(disposing);
     }
@@ -65,8 +68,14 @@ partial class Form1
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 10F);
+        BackColor = UiTheme.Background;
+        ForeColor = UiTheme.Text;
 
-        MenuStrip menu = new() { ShowItemToolTips = true, Renderer = new PageMenuRenderer() };
+        MenuStrip menu = new()
+        {
+            ShowItemToolTips = true, Renderer = new PageMenuRenderer(), Font = Font,
+            BackColor = UiTheme.Surface, ForeColor = UiTheme.Text, Padding = new Padding(12, 6, 12, 6)
+        };
         ToolStripMenuItem fileMenu = new("File");
         ToolStripMenuItem newMenuItem = new("New", null, New_Click) { ShortcutKeys = Keys.Control | Keys.N };
         ToolStripMenuItem openMenuItem = new("Open", null, Open_Click) { ShortcutKeys = Keys.Control | Keys.O };
@@ -93,8 +102,14 @@ partial class Form1
             fileMenu, editMenu,
             new ToolStripMenuItem("Settings", null, Settings_Click), new ToolStripSeparator()
         });
+        foreach (ToolStripItem item in menu.Items) item.Padding = new Padding(12, 6, 12, 6);
+        fileMenu.DropDown.Renderer = new PageMenuRenderer();
+        fileMenu.DropDown.BackColor = UiTheme.Surface;
         MainMenuStrip = menu;
-        pageContextMenu = new ContextMenuStrip(components);
+        pageContextMenu = new ContextMenuStrip(components)
+        {
+            Renderer = new PageMenuRenderer(), BackColor = UiTheme.Surface, Font = Font
+        };
         pageContextMenu.Items.Add("Delete", null, (_, _) =>
         {
             if (contextDocument != null) CloseDocument(contextDocument);
@@ -106,56 +121,61 @@ partial class Form1
 
         ToolStrip toolbar = new()
         {
-            GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(8, 6, 8, 6),
-            BackColor = Color.FromArgb(240, 243, 247)
+            GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(12, 8, 12, 8),
+            BackColor = UiTheme.Surface, Font = Font, Renderer = new PageMenuRenderer(),
+            ImageScalingSize = new Size(24, 24)
         };
         foreach (ToolType tool in Enum.GetValues<ToolType>())
         {
-            string toolCaption = tool == ToolType.Text ? "Plain Text" : tool == ToolType.Selection ? "Select Area" : tool.ToString();
-            ToolStripButton button = new(toolCaption)
-            {
-                DisplayStyle = ToolStripItemDisplayStyle.Text,
-                AutoToolTip = false, ToolTipText = $"Клавиша {GetToolHotkey(tool)}", Padding = new Padding(5)
-            };
+            string toolCaption = tool == ToolType.Mouse ? "Мышь" : tool == ToolType.Text ? "Plain Text"
+                : tool == ToolType.Selection ? "Select Area" : tool.ToString();
+            ToolStripButton button = CreateToolbarButton(toolCaption, tool.ToString(), GetToolHotkey(tool).ToString());
+            if (tool == ToolType.Mouse)
+                button.ToolTipText = "Мышь — V\nПеретаскивайте холст левой кнопкой для перемещения вида";
             button.Click += (_, _) => SelectTool(tool);
             toolButtons.Add(tool, button);
             toolbar.Items.Add(button);
         }
-        undoButton = new("Undo", null, Undo_Click);
-        redoButton = new("Redo", null, Redo_Click);
-        eraseSelectionButton = new("Erase Selection", null, EraseSelection_Click) { ToolTipText = "Удалить выделенную область — Del" };
+        undoButton = CreateToolbarButton("Undo", "Undo", "Ctrl+Z");
+        undoButton.Click += Undo_Click;
+        redoButton = CreateToolbarButton("Redo", "Redo", "Ctrl+Y");
+        redoButton.Click += Redo_Click;
+        eraseSelectionButton = CreateToolbarButton("Erase Selection", "Erase Selection", "Del");
+        eraseSelectionButton.Click += EraseSelection_Click;
+        ToolStripButton clearButton = CreateToolbarButton("Clear", "Clear", "Очистить холст");
+        clearButton.Click += Clear_Click;
         toolbar.Items.AddRange(new ToolStripItem[]
         {
-            new ToolStripSeparator(), new ToolStripButton("Clear", null, Clear_Click),
+            new ToolStripSeparator(), clearButton,
             new ToolStripSeparator(), undoButton, redoButton, new ToolStripSeparator(), eraseSelectionButton
         });
 
         FlowLayoutPanel widthPanel = new()
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12, 7, 12, 7),
-            BackColor = Color.FromArgb(248, 249, 251)
+            Padding = new Padding(16, 8, 16, 8),
+            BackColor = UiTheme.Background
         };
-        Label caption = new() { Text = "Толщина:", AutoSize = true, Margin = new Padding(0, 5, 8, 0) };
+        Label caption = new() { Text = "Толщина:", AutoSize = true, ForeColor = UiTheme.Muted, Margin = new Padding(0, 9, 8, 0) };
         widthInput = new()
         {
-            Minimum = 1, Maximum = 100, Value = brushWidth, Width = 65
+            Minimum = 1, Maximum = 100, Value = brushWidth, Width = 65,
+            BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(3, 6, 3, 0)
         };
         widthSlider = new()
         {
             Minimum = 1, Maximum = 100, Value = brushWidth, Width = 220,
-            AutoSize = false, Height = 32, TickStyle = TickStyle.None,
+            AutoSize = false, Height = 38, TickStyle = TickStyle.None, BackColor = UiTheme.Background,
             SmallChange = 1, LargeChange = 10, Margin = new Padding(8, 0, 0, 0)
         };
-        widthLabel = new() { AutoSize = true, Margin = new Padding(10, 5, 0, 0) };
+        widthLabel = new() { AutoSize = true, ForeColor = UiTheme.Muted, Margin = new Padding(10, 9, 0, 0) };
         widthInput.ValueChanged += (_, _) => SetBrushWidth((int)widthInput.Value);
         widthSlider.ValueChanged += (_, _) => SetBrushWidth(widthSlider.Value);
-        colorButton = new()
+        colorButton = new ColorSampleButton
         {
-            Text = "Color", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12, 5, 12, 5), Margin = new Padding(20, 0, 0, 0),
-            UseVisualStyleBackColor = false
+            Text = "Color", Margin = new Padding(20, 0, 0, 0)
         };
+        UiTheme.StyleButton(colorButton);
         colorButton.Click += Color_Click;
         textFontSizeLabel = new()
         {
@@ -172,7 +192,7 @@ partial class Form1
         };
         textOptionsPanel = new TableLayoutPanel
         {
-            AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 2, RowCount = 7
+            AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 2, RowCount = 7
         };
         textOptionsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         textOptionsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -220,7 +240,7 @@ partial class Form1
         textOptionsPanel.Controls.Add(textVerticalComboBox, 1, 5);
         Label textHint = new()
         {
-            Text = "Ctrl+Enter — применить текст\nEsc — отменить ввод", AutoSize = true, Margin = new Padding(3, 10, 3, 3)
+            Text = "Ctrl+Enter — применить текст\nEsc — отменить ввод", AutoSize = true, Margin = new Padding(3, 14, 3, 3)
         };
         textOptionsPanel.Controls.Add(textHint, 0, 6);
         textOptionsPanel.SetColumnSpan(textHint, 2);
@@ -232,7 +252,16 @@ partial class Form1
 
         canvasPanel = new()
         {
-            Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(210, 215, 222)
+            Dock = DockStyle.Fill, AutoScroll = true, BackColor = UiTheme.Workspace
+        };
+        canvasPanel.Paint += CanvasPanel_Paint;
+        canvasPanel.Scroll += (_, _) => canvasPanel.Invalidate();
+        canvasPanel.MouseDown += Canvas_MouseDown;
+        canvasPanel.MouseMove += Canvas_MouseMove;
+        canvasPanel.MouseUp += Canvas_MouseUp;
+        canvasPanel.MouseCaptureChanged += (_, _) =>
+        {
+            if (!canvasPanel.Capture) EndCanvasPan();
         };
         canvasPictureBox = new PictureBox
         {
@@ -246,11 +275,15 @@ partial class Form1
         canvasPictureBox.Paint += Canvas_Paint;
         canvasPictureBox.MouseCaptureChanged += (_, _) =>
         {
-            if (!canvasPictureBox.Capture) FinishDrawing();
+            if (!canvasPictureBox.Capture && !isPanning) FinishDrawing();
         };
         canvasPictureBox.MouseLeave += (_, _) => coordinatesStatusLabel.Text = "X: —, Y: —";
 
-        StatusStrip status = new();
+        StatusStrip status = new()
+        {
+            BackColor = UiTheme.Surface, ForeColor = UiTheme.Muted, Font = Font,
+            Renderer = new PageMenuRenderer(), SizingGrip = false, Padding = new Padding(12, 4, 12, 4)
+        };
         toolStatusLabel = new() { BorderSides = ToolStripStatusLabelBorderSides.Right };
         colorStatusLabel = new() { BorderSides = ToolStripStatusLabelBorderSides.Right };
         widthStatusLabel = new() { BorderSides = ToolStripStatusLabelBorderSides.Right };
@@ -269,10 +302,21 @@ partial class Form1
         ResumeLayout(true);
     }
 
-    private static Button CreateTextOptionButton(string text) => new()
+    private ToolStripButton CreateToolbarButton(string text, string iconName, string shortcut)
     {
-        Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        Padding = new Padding(8, 5, 8, 5), UseVisualStyleBackColor = false
+        Image image = ToolIcons.Create(iconName);
+        toolbarImages.Add(image);
+        return new ToolStripButton(text, image)
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.Image, AutoSize = false, Size = new Size(44, 40),
+            Margin = new Padding(3, 0, 3, 0), AutoToolTip = false, ToolTipText = $"{text} — {shortcut}",
+            AccessibleName = text, AccessibleDescription = shortcut
+        };
+    }
+
+    private static ColorSampleButton CreateTextOptionButton(string text) => new()
+    {
+        Text = text, Margin = new Padding(3, 5, 3, 5)
     };
 }
 

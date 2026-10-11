@@ -23,13 +23,14 @@ internal sealed class SettingsDialog : Form
         Text = "Settings";
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = MinimizeBox = false;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
         ShowInTaskbar = false;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         TableLayoutPanel layout = new()
         {
-            AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 3, RowCount = 7
+            AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 3, RowCount = 7
         };
         for (int i = 0; i < 3; i++) layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         for (int i = 0; i < 7; i++) layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -80,6 +81,7 @@ internal sealed class SettingsDialog : Form
             AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false
         };
         Button applyButton = CreateButton("Применить");
+        applyButton.Tag = "primary";
         applyButton.Click += (_, _) =>
         {
             try
@@ -103,6 +105,7 @@ internal sealed class SettingsDialog : Form
         Controls.Add(layout);
         AcceptButton = applyButton;
         CancelButton = cancelButton;
+        UiTheme.Apply(this);
         ResumeLayout(true);
     }
 
@@ -110,6 +113,7 @@ internal sealed class SettingsDialog : Form
 
     private static Button CreateButton(string text) => new()
     {
-        Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 6, 10, 6)
+        Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Padding = new Padding(12, 7, 12, 7), Margin = new Padding(3, 5, 3, 5)
     };
 }

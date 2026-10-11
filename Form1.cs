@@ -31,6 +31,8 @@ public partial class Form1 : Form, IMessageFilter
     private Color currentColor = Color.Black;
     private int brushWidth = 3;
     private bool isDrawing;
+    private bool isPanning;
+    private Point panAnchor;
     private Point startPoint;
     private Point lastPoint;
     private Bitmap? movingBitmap;
@@ -64,13 +66,36 @@ public partial class Form1 : Form, IMessageFilter
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        UpdateToolbarSizes();
         // The maximized window has its final layout only after it is shown.
         Bitmap bitmap = CreateBlankCanvas();
         ReplaceCanvas(bitmap);
     }
 
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        UpdateToolbarSizes();
+        if (currentDocument != null) UpdateCanvasLayout();
+    }
+
+    private void UpdateToolbarSizes()
+    {
+        ToolStrip? toolbar = toolButtons.Values.FirstOrDefault()?.Owner;
+        if (toolbar == null) return;
+        float scale = DeviceDpi / 96f;
+        toolbar.ImageScalingSize = new Size((int)(24 * scale), (int)(24 * scale));
+        foreach (ToolStripButton button in toolbar.Items.OfType<ToolStripButton>())
+        {
+            button.Size = new Size((int)(44 * scale), (int)(40 * scale));
+            button.Margin = new Padding((int)(3 * scale), 0, (int)(3 * scale), 0);
+        }
+    }
+
+    private int CanvasMargin => (int)(20 * DeviceDpi / 96f);
     private Size GetWindowCanvasSize() => new(
-        Math.Max(1, canvasPanel.Width), Math.Max(1, canvasPanel.Height));
+        Math.Max(1, canvasPanel.ClientSize.Width - CanvasMargin * 2),
+        Math.Max(1, canvasPanel.ClientSize.Height - CanvasMargin * 2));
 
     private Size GetNewCanvasSize() => settings.CanvasWidth == 0
         ? GetWindowCanvasSize() : new Size(settings.CanvasWidth, settings.CanvasHeight);
@@ -102,7 +127,10 @@ public partial class Form1 : Form, IMessageFilter
         documents.Add(document);
         documentTabFont ??= new Font(MainMenuStrip!.Font.FontFamily,
             MainMenuStrip.Font.Size * 1.5f, MainMenuStrip.Font.Style, MainMenuStrip.Font.Unit);
-        ToolStripMenuItem tab = new(document.Number.ToString()) { Font = documentTabFont, Tag = document };
+        ToolStripMenuItem tab = new(document.Number.ToString())
+        {
+            Font = documentTabFont, Tag = document, Padding = new Padding(14, 4, 14, 4), Margin = new Padding(3, 0, 3, 0)
+        };
         tab.Click += (_, _) =>
         {
             if (!pageContextMenu.Visible) SwitchDocument(document);
@@ -148,7 +176,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         const int MouseWheelMessage = 0x020A;
         const int ControlKeyFlag = 0x0008;
-        if (message.Msg != MouseWheelMessage || (message.WParam.ToInt64() & ControlKeyFlag) == 0 || !Visible) return false;
+        if (message.Msg != MouseWheelMessage || !Visible || !Enabled) return false;
         Control? target = Control.FromHandle(message.HWnd);
         Form? targetForm = target?.FindForm();
         if (targetForm != this && targetForm != textOptionsWindow) return false;
@@ -156,14 +184,66 @@ public partial class Form1 : Form, IMessageFilter
         Point screenPoint = new((short)(position & 0xffff), (short)((position >> 16) & 0xffff));
         if (!canvasPanel.RectangleToScreen(canvasPanel.ClientRectangle).Contains(screenPoint)) return false;
         int delta = (short)((message.WParam.ToInt64() >> 16) & 0xffff);
-        ZoomCanvas(delta, canvasPanel.PointToClient(screenPoint));
-        // Consume the wheel so Ctrl+wheel does not also scroll the canvas or text.
+        if ((message.WParam.ToInt64() & ControlKeyFlag) != 0)
+            ZoomCanvas(delta, canvasPanel.PointToClient(screenPoint));
+        else ScrollCanvas(delta, (message.WParam.ToInt64() & 0x0004) != 0);
+        // Handle the wheel explicitly: PictureBox does not reliably scroll its parent.
         return true;
+    }
+
+    private void ScrollCanvas(int delta, bool horizontal)
+    {
+        if (isDrawing || isPanning) return;
+        horizontal |= !canvasPanel.VerticalScroll.Visible && canvasPanel.HorizontalScroll.Visible;
+        int lines = SystemInformation.MouseWheelScrollLines;
+        int distance = lines < 0 ? (horizontal ? canvasPanel.ClientSize.Width : canvasPanel.ClientSize.Height)
+            : (int)(20 * DeviceDpi / 96f) * lines;
+        int movement = (int)Math.Round(-delta / (float)SystemInformation.MouseWheelScrollDelta * distance);
+        Point scroll = canvasPanel.AutoScrollPosition;
+        SetCanvasScrollPosition(-scroll.X + (horizontal ? movement : 0), -scroll.Y + (horizontal ? 0 : movement));
+    }
+
+    private void SetCanvasScrollPosition(int x, int y)
+    {
+        int maxX = Math.Max(0, canvasPanel.DisplayRectangle.Width - canvasPanel.ClientSize.Width);
+        int maxY = Math.Max(0, canvasPanel.DisplayRectangle.Height - canvasPanel.ClientSize.Height);
+        canvasPanel.AutoScrollPosition = new Point(Math.Clamp(x, 0, maxX), Math.Clamp(y, 0, maxY));
+        canvasPanel.Invalidate();
+    }
+
+    private Point GetViewportPoint(object? sender, Point point) =>
+        canvasPanel.PointToClient((sender as Control ?? canvasPictureBox).PointToScreen(point));
+
+    private void BeginCanvasPan(object? sender, MouseEventArgs e)
+    {
+        if (!canvasPanel.HorizontalScroll.Visible && !canvasPanel.VerticalScroll.Visible) return;
+        panAnchor = GetViewportPoint(sender, e.Location);
+        isPanning = true;
+        canvasPanel.Cursor = canvasPictureBox.Cursor = Cursors.SizeAll;
+        canvasPanel.Capture = true;
+    }
+
+    private void UpdateCanvasPan(object? sender, MouseEventArgs e)
+    {
+        // Use viewport coordinates because scrolling moves the PictureBox itself.
+        Point position = GetViewportPoint(sender, e.Location);
+        Point scroll = canvasPanel.AutoScrollPosition;
+        SetCanvasScrollPosition(-scroll.X + panAnchor.X - position.X, -scroll.Y + panAnchor.Y - position.Y);
+        panAnchor = position;
+    }
+
+    private void EndCanvasPan()
+    {
+        if (!isPanning) return;
+        isPanning = false;
+        canvasPanel.Capture = false;
+        canvasPanel.Cursor = Cursors.Default;
+        canvasPictureBox.Cursor = Cursors.Default;
     }
 
     private void ZoomCanvas(int delta, Point anchor)
     {
-        if (isDrawing) return;
+        if (isDrawing || isPanning) return;
         wheelRemainder += delta;
         int steps = wheelRemainder / SystemInformation.MouseWheelScrollDelta;
         wheelRemainder %= SystemInformation.MouseWheelScrollDelta;
@@ -174,8 +254,8 @@ public partial class Form1 : Form, IMessageFilter
         currentDocument.ZoomIndex = index;
         UpdateCanvasLayout();
         canvasPanel.AutoScrollPosition = new Point(
-            Math.Max(0, (int)Math.Round(canvasPoint.X * ZoomFactor - anchor.X)),
-            Math.Max(0, (int)Math.Round(canvasPoint.Y * ZoomFactor - anchor.Y)));
+            Math.Max(0, (int)Math.Round(CanvasMargin + canvasPoint.X * ZoomFactor - anchor.X)),
+            Math.Max(0, (int)Math.Round(CanvasMargin + canvasPoint.Y * ZoomFactor - anchor.Y)));
         if (inlineTextPanel != null)
         {
             inlineTextPanel.Bounds = ToDisplayBounds(inlineTextBounds);
@@ -289,7 +369,7 @@ public partial class Form1 : Form, IMessageFilter
             pair.Value.Checked = pair.Key == tool;
         if (tool == ToolType.Text) ShowTextOptions();
         else textOptionsWindow.Hide();
-        canvasPictureBox.Cursor = tool == ToolType.Text ? Cursors.IBeam
+        canvasPictureBox.Cursor = tool == ToolType.Mouse ? Cursors.Default : tool == ToolType.Text ? Cursors.IBeam
             : tool == ToolType.Eraser ? Cursors.Hand : Cursors.Cross;
         canvasPictureBox.Focus();
         UpdateStatus();
@@ -320,6 +400,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private static Keys GetToolHotkey(ToolType tool) => tool switch
     {
+        ToolType.Mouse => Keys.V,
         ToolType.Pencil => Keys.P,
         ToolType.Eraser => Keys.E,
         ToolType.Line => Keys.L,
@@ -366,6 +447,11 @@ public partial class Form1 : Form, IMessageFilter
         if ((keyData & Keys.Modifiers) == Keys.None)
         {
             if (textOptionsPanel.ContainsFocus) return base.ProcessCmdKey(ref msg, keyData);
+            if (keyData == Keys.Escape && isPanning)
+            {
+                EndCanvasPan();
+                return true;
+            }
             if (keyData == Keys.Escape && movingBitmap != null)
             {
                 CancelSelectionMove();
@@ -405,14 +491,13 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateStatus()
     {
-        toolStatusLabel.Text = inlineTextEditor == null ? $"Инструмент: {currentTool}"
+        toolStatusLabel.Text = inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool)}"
             : "Текст: Ctrl+Enter — применить, Esc — отменить";
         Color statusColor = currentTool == ToolType.Text ? textColor : currentColor;
         colorStatusLabel.Text = $"Цвет: #{statusColor.R:X2}{statusColor.G:X2}{statusColor.B:X2}";
         widthStatusLabel.Text = $"Толщина: {brushWidth} px";
         widthLabel.Text = $"{brushWidth} px";
-        colorButton.BackColor = currentColor;
-        colorButton.ForeColor = currentColor.GetBrightness() < 0.5f ? Color.White : Color.Black;
+        colorButton.SampleColor = currentColor;
         UpdateTextColorButtons();
     }
 
@@ -432,9 +517,15 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Canvas_MouseDown(object? sender, MouseEventArgs e)
     {
-        if (e.Button != MouseButtons.Left || isDrawing) return;
+        if (e.Button != MouseButtons.Left || isDrawing || isPanning) return;
+        if (sender == canvasPanel && currentTool != ToolType.Mouse) return;
         FinishInlineText(true);
         ActiveControl = null;
+        if (currentTool == ToolType.Mouse)
+        {
+            BeginCanvasPan(sender, e);
+            return;
+        }
         canvasPictureBox.Focus();
         startPoint = lastPoint = ClampPoint(ToCanvasPoint(e.Location));
         if (currentTool == ToolType.Fill)
@@ -475,6 +566,12 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Canvas_MouseMove(object? sender, MouseEventArgs e)
     {
+        if (isPanning)
+        {
+            UpdateCanvasPan(sender, e);
+            return;
+        }
+        if (sender == canvasPanel) return;
         Point canvasPoint = ToCanvasPoint(e.Location);
         coordinatesStatusLabel.Text = $"X: {canvasPoint.X}, Y: {canvasPoint.Y}";
         if (!isDrawing)
@@ -505,6 +602,12 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)
     {
+        if (e.Button == MouseButtons.Left && isPanning)
+        {
+            UpdateCanvasPan(sender, e);
+            EndCanvasPan();
+            return;
+        }
         if (e.Button != MouseButtons.Left || !isDrawing) return;
         Canvas_MouseMove(sender, e);
         FinishDrawing();
@@ -512,6 +615,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private void FinishDrawing()
     {
+        EndCanvasPan();
         FinishInlineText(true);
         if (!isDrawing) return;
         bool startTextEditor = currentTool == ToolType.Text;
@@ -663,10 +767,8 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateTextColorButtons()
     {
-        textColorButton.BackColor = textColor;
-        textColorButton.ForeColor = textColor.GetBrightness() < 0.5f ? Color.White : Color.Black;
-        textBackgroundButton.BackColor = textBackgroundColor;
-        textBackgroundButton.ForeColor = textBackgroundColor.GetBrightness() < 0.5f ? Color.White : Color.Black;
+        textColorButton.SampleColor = textColor;
+        textBackgroundButton.SampleColor = textBackgroundColor;
     }
 
     private void TextColor_Click(object? sender, EventArgs e)
@@ -912,9 +1014,21 @@ public partial class Form1 : Form, IMessageFilter
     private void UpdateCanvasLayout()
     {
         Size displaySize = ToDisplayBounds(new Rectangle(Point.Empty, canvasBitmap.Size)).Size;
-        canvasPanel.AutoScrollMinSize = displaySize;
+        canvasPanel.AutoScrollMinSize = new Size(displaySize.Width + CanvasMargin * 2, displaySize.Height + CanvasMargin * 2);
         canvasPictureBox.Size = displaySize;
+        Point scroll = canvasPanel.AutoScrollPosition;
+        canvasPictureBox.Location = new Point(CanvasMargin + scroll.X, CanvasMargin + scroll.Y);
         zoomStatusLabel.Text = $"Масштаб: {ZoomLevels[currentDocument.ZoomIndex]}%";
+        canvasPanel.Invalidate();
+    }
+
+    private void CanvasPanel_Paint(object? sender, PaintEventArgs e)
+    {
+        Rectangle bounds = canvasPictureBox.Bounds;
+        using Brush shadow = new SolidBrush(Color.FromArgb(208, 216, 204));
+        e.Graphics.FillRectangle(shadow, new Rectangle(bounds.X + 4, bounds.Y + 4, bounds.Width, bounds.Height));
+        using Pen border = new(UiTheme.Border);
+        e.Graphics.DrawRectangle(border, bounds.X - 1, bounds.Y - 1, bounds.Width + 1, bounds.Height + 1);
     }
 
     private void Undo_Click(object? sender, EventArgs e)
