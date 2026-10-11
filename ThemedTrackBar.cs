@@ -15,13 +15,21 @@ internal sealed class ThemedTrackBar : TrackBar
     private const ulong Thumb = 2;
     private const ulong Channel = 3;
     private bool hovered;
+    private int paintedValue;
 
     public ThemedTrackBar() { Cursor = Cursors.Hand; }
 
     protected override void OnValueChanged(EventArgs e)
     {
+        paintedValue = Value;
         base.OnValueChanged(e);
         Invalidate();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        paintedValue = Value;
     }
 
     protected override void OnMouseEnter(EventArgs e)
@@ -48,6 +56,8 @@ internal sealed class ThemedTrackBar : TrackBar
                 CustomDrawData data = Marshal.PtrToStructure<CustomDrawData>(message.LParam);
                 if (data.Stage == PrePaint)
                 {
+                    using Graphics background = Graphics.FromHdc(data.DeviceContext);
+                    background.Clear(BackColor);
                     message.Result = (IntPtr)NotifyItemDraw;
                     return;
                 }
@@ -72,8 +82,9 @@ internal sealed class ThemedTrackBar : TrackBar
         float thickness = 4 * DeviceDpi / 96f;
         using Pen track = new(UiTheme.Border, thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         graphics.DrawLine(track, bounds.Left, middle, bounds.Right, middle);
-        if (Value <= Minimum || Maximum == Minimum) return;
-        float fraction = (Value - Minimum) / (float)(Maximum - Minimum);
+        // Reading Value here updates TrackBar's internal state before it can raise ValueChanged.
+        if (paintedValue <= Minimum || Maximum == Minimum) return;
+        float fraction = (paintedValue - Minimum) / (float)(Maximum - Minimum);
         using Pen filled = new(Enabled ? UiTheme.AccentBorder : UiTheme.Muted, thickness)
         {
             StartCap = LineCap.Round, EndCap = LineCap.Round
