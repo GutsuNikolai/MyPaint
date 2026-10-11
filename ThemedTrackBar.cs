@@ -9,11 +9,9 @@ internal sealed class ThemedTrackBar : TrackBar
     private const int ReflectedNotify = 0x204E;
     private const int CustomDraw = -12;
     private const uint PrePaint = 0x0001;
-    private const uint ItemPrePaint = 0x10001;
-    private const int NotifyItemDraw = 0x0020;
     private const int SkipDefault = 0x0004;
-    private const ulong Thumb = 2;
-    private const ulong Channel = 3;
+    private const int GetThumbRectangle = 0x0419;
+    private const int GetChannelRectangle = 0x041A;
     private bool hovered;
     private int paintedValue;
 
@@ -56,18 +54,16 @@ internal sealed class ThemedTrackBar : TrackBar
                 CustomDrawData data = Marshal.PtrToStructure<CustomDrawData>(message.LParam);
                 if (data.Stage == PrePaint)
                 {
-                    using Graphics background = Graphics.FromHdc(data.DeviceContext);
-                    background.Clear(BackColor);
-                    message.Result = (IntPtr)NotifyItemDraw;
-                    return;
-                }
-                if (data.Stage == ItemPrePaint && data.Item.ToUInt64() is Thumb or Channel)
-                {
+                    NativeRectangle channel = new(), thumb = new();
+                    SendMessage(Handle, GetChannelRectangle, IntPtr.Zero, ref channel);
+                    SendMessage(Handle, GetThumbRectangle, IntPtr.Zero, ref thumb);
                     using Graphics graphics = Graphics.FromHdc(data.DeviceContext);
+                    using Brush background = new SolidBrush(BackColor);
+                    graphics.FillRectangle(background, ClientRectangle);
                     graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                    Rectangle bounds = Rectangle.FromLTRB(data.Bounds.Left, data.Bounds.Top, data.Bounds.Right, data.Bounds.Bottom);
-                    if (data.Item.ToUInt64() == Channel) DrawChannel(graphics, bounds);
-                    else DrawThumb(graphics, bounds);
+                    // Native partial updates can repaint only the thumb. Always draw both parts together.
+                    DrawChannel(graphics, channel.ToRectangle());
+                    DrawThumb(graphics, thumb.ToRectangle());
                     message.Result = (IntPtr)SkipDefault;
                     return;
                 }
@@ -115,7 +111,12 @@ internal sealed class ThemedTrackBar : TrackBar
     private struct NativeRectangle
     {
         public int Left, Top, Right, Bottom;
+
+        public readonly Rectangle ToRectangle() => Rectangle.FromLTRB(Left, Top, Right, Bottom);
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, ref NativeRectangle rectangle);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct CustomDrawData
