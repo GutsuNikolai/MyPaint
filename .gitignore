@@ -1,0 +1,8 @@
+# Build output and local Visual Studio settings
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
