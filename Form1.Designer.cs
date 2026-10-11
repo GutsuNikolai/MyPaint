@@ -166,14 +166,14 @@ partial class Form1
         {
             Minimum = 1, Maximum = 100, Value = brushWidth, Width = 220,
             AutoSize = false, Height = 38, TickStyle = TickStyle.None, BackColor = UiTheme.Background,
-            SmallChange = 1, LargeChange = 10, Margin = new Padding(8, 0, 0, 0)
+            SmallChange = 1, LargeChange = 10, Margin = new Padding(8, 2, 0, 0)
         };
         widthLabel = new() { AutoSize = true, ForeColor = UiTheme.Muted, Margin = new Padding(10, 9, 0, 0) };
         widthInput.ValueChanged += (_, _) => SetBrushWidth((int)widthInput.Value);
         widthSlider.ValueChanged += (_, _) => SetBrushWidth(widthSlider.Value);
         colorButton = new ColorSampleButton
         {
-            Text = "Color", Margin = new Padding(20, 0, 0, 0)
+            Text = "Color", Margin = new Padding(50, 0, 0, 0)
         };
         UiTheme.StyleButton(colorButton);
         colorButton.Click += Color_Click;
