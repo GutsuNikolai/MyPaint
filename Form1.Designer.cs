@@ -13,6 +13,8 @@ partial class Form1
     private ToolStripMenuItem redoMenuItem = null!;
     private ToolStripButton eraseSelectionButton = null!;
     private ToolStripMenuItem eraseSelectionMenuItem = null!;
+    private ToolStripMenuItem copyImageMenuItem = null!;
+    private ToolStripMenuItem cutImageMenuItem = null!;
     private Label widthLabel = null!;
     private NumericUpDown widthInput = null!;
     private TrackBar widthSlider = null!;
@@ -43,6 +45,8 @@ partial class Form1
             FinishInlineText(false);
             movingBitmap?.Dispose();
             movingBitmap = null;
+            pastedBitmap?.Dispose();
+            pastedBitmap = null;
             if (canvasPictureBox != null) canvasPictureBox.Image = null;
             foreach (DrawingDocument document in documents) document.Dispose();
             documents.Clear();
@@ -67,6 +71,7 @@ partial class Form1
         WindowState = FormWindowState.Maximized;
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
+        KeyPreview = true;
         Font = new Font("Segoe UI", 10F);
         BackColor = UiTheme.Background;
         ForeColor = UiTheme.Text;
@@ -99,7 +104,7 @@ partial class Form1
         });
         menu.Items.AddRange(new ToolStripItem[]
         {
-            fileMenu, editMenu,
+            fileMenu, editMenu, CreateImageMenu(),
             new ToolStripMenuItem("Settings", null, Settings_Click), new ToolStripSeparator()
         });
         foreach (ToolStripItem item in menu.Items) item.Padding = new Padding(12, 6, 12, 6);
@@ -127,11 +132,14 @@ partial class Form1
         };
         foreach (ToolType tool in Enum.GetValues<ToolType>())
         {
-            string toolCaption = tool == ToolType.Mouse ? "Мышь" : tool == ToolType.Text ? "Plain Text"
+            string toolCaption = tool == ToolType.Mouse ? "Мышь" : tool == ToolType.Eyedropper ? "Пипетка"
+                : tool == ToolType.Text ? "Plain Text"
                 : tool == ToolType.Selection ? "Select Area" : tool.ToString();
             ToolStripButton button = CreateToolbarButton(toolCaption, tool.ToString(), GetToolHotkey(tool).ToString());
             if (tool == ToolType.Mouse)
                 button.ToolTipText = "Мышь — V\nПеретаскивайте холст левой кнопкой для перемещения вида";
+            if (tool is ToolType.Rectangle or ToolType.Ellipse)
+                button.ToolTipText += tool == ToolType.Rectangle ? "\nShift — квадрат" : "\nShift — круг";
             button.Click += (_, _) => SelectTool(tool);
             toolButtons.Add(tool, button);
             toolbar.Items.Add(button);
@@ -279,7 +287,11 @@ partial class Form1
         canvasPictureBox.Paint += Canvas_Paint;
         canvasPictureBox.MouseCaptureChanged += (_, _) =>
         {
-            if (!canvasPictureBox.Capture && !isPanning) FinishDrawing();
+            if (!canvasPictureBox.Capture && !isPanning)
+            {
+                if (pastedBitmap != null) isDraggingPaste = false;
+                else FinishDrawing();
+            }
         };
         canvasPictureBox.MouseLeave += (_, _) => coordinatesStatusLabel.Text = "X: —, Y: —";
 

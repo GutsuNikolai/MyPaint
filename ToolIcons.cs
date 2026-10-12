@@ -36,6 +36,11 @@ internal static class ToolIcons
                 g.FillPolygon(accent, bucket); g.DrawPolygon(pen, bucket); g.DrawLine(pen, 6, 11, 17, 11);
                 g.DrawLine(pen, 9, 3, 14, 8); g.FillEllipse(accent, 18, 17, 4, 5); g.DrawEllipse(pen, 18, 17, 4, 5); break;
             case "Selection": pen.DashStyle = DashStyle.Dash; g.DrawRectangle(pen, 3, 4, 18, 16); break;
+            case "Eyedropper":
+                PointF[] pipette = { new(4, 17), new(13, 8), new(17, 12), new(8, 21), new(3, 22) };
+                g.FillPolygon(accent, pipette); g.DrawPolygon(pen, pipette);
+                g.DrawLine(pen, 11, 7, 18, 14); g.DrawLine(pen, 14, 6, 18, 2);
+                g.DrawArc(pen, 15, 2, 7, 7, 225, 180); break;
             case "Clear":
                 g.DrawRectangle(pen, 6, 7, 12, 14); g.DrawLine(pen, 4, 7, 20, 7); g.DrawLine(pen, 9, 3, 15, 3); g.DrawLine(pen, 10, 11, 10, 17); g.DrawLine(pen, 14, 11, 14, 17); break;
             case "Erase Selection":

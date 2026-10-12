@@ -10,5 +10,6 @@ public enum ToolType
     Ellipse,
     Text,
     Fill,
+    Eyedropper,
     Selection
 }

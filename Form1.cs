@@ -38,6 +38,11 @@ public partial class Form1 : Form, IMessageFilter
     private Bitmap? movingBitmap;
     private Rectangle moveSource;
     private Rectangle moveDestination;
+    private Bitmap? pastedBitmap;
+    private Rectangle pasteBounds;
+    private Point pasteDragOffset;
+    private bool isDraggingPaste;
+    private bool constrainShape;
     private TextBox? inlineTextEditor;
     private Font? inlineTextFont;
     private Rectangle inlineTextBounds;
@@ -193,7 +198,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private void ScrollCanvas(int delta, bool horizontal)
     {
-        if (isDrawing || isPanning) return;
+        if (isDrawing || isPanning || isDraggingPaste) return;
         horizontal |= !canvasPanel.VerticalScroll.Visible && canvasPanel.HorizontalScroll.Visible;
         int lines = SystemInformation.MouseWheelScrollLines;
         int distance = lines < 0 ? (horizontal ? canvasPanel.ClientSize.Width : canvasPanel.ClientSize.Height)
@@ -243,7 +248,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private void ZoomCanvas(int delta, Point anchor)
     {
-        if (isDrawing || isPanning) return;
+        if (isDrawing || isPanning || isDraggingPaste) return;
         wheelRemainder += delta;
         int steps = wheelRemainder / SystemInformation.MouseWheelScrollDelta;
         wheelRemainder %= SystemInformation.MouseWheelScrollDelta;
@@ -408,12 +413,18 @@ public partial class Form1 : Form, IMessageFilter
         ToolType.Ellipse => Keys.O,
         ToolType.Text => Keys.T,
         ToolType.Fill => Keys.F,
+        ToolType.Eyedropper => Keys.I,
         ToolType.Selection => Keys.S,
         _ => Keys.None
     };
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (pastedBitmap != null && keyData is Keys.Enter or Keys.Escape or Keys.Delete)
+        {
+            FinishPaste(keyData == Keys.Enter);
+            return true;
+        }
         if (inlineTextEditor != null)
         {
             if (keyData == (Keys.Control | Keys.Enter))
@@ -433,6 +444,14 @@ public partial class Form1 : Form, IMessageFilter
             }
             // Letters and Del belong to text input, not to drawing tool shortcuts.
             if (inlineTextEditor.ContainsFocus) return base.ProcessCmdKey(ref msg, keyData);
+        }
+        if (keyData is (Keys.Control | Keys.C) or (Keys.Control | Keys.X) or (Keys.Control | Keys.V))
+        {
+            if (widthInput.ContainsFocus || textOptionsPanel.ContainsFocus)
+                return base.ProcessCmdKey(ref msg, keyData);
+            if (keyData == (Keys.Control | Keys.V)) PasteImage_Click(this, EventArgs.Empty);
+            else CopyImage(keyData == (Keys.Control | Keys.X));
+            return true;
         }
         if (keyData == (Keys.Control | Keys.Z))
         {
@@ -491,7 +510,8 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateStatus()
     {
-        toolStatusLabel.Text = inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool)}"
+        toolStatusLabel.Text = pastedBitmap != null ? "Вставка: перетащите, Enter — применить, Esc — отменить"
+            : inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool == ToolType.Eyedropper ? "Пипетка" : currentTool)}"
             : "Текст: Ctrl+Enter — применить, Esc — отменить";
         Color statusColor = currentTool == ToolType.Text ? textColor : currentColor;
         colorStatusLabel.Text = $"Цвет: #{statusColor.R:X2}{statusColor.G:X2}{statusColor.B:X2}";
@@ -519,6 +539,19 @@ public partial class Form1 : Form, IMessageFilter
     {
         if (e.Button != MouseButtons.Left || isDrawing || isPanning) return;
         if (sender == canvasPanel && currentTool != ToolType.Mouse) return;
+        if (pastedBitmap != null)
+        {
+            Point point = ClampPoint(ToCanvasPoint(e.Location));
+            if (pasteBounds.Contains(point))
+            {
+                pasteDragOffset = new Point(point.X - pasteBounds.X, point.Y - pasteBounds.Y);
+                isDraggingPaste = true;
+                canvasPictureBox.Focus();
+                canvasPictureBox.Capture = true;
+                return;
+            }
+            FinishPaste(true);
+        }
         FinishInlineText(true);
         ActiveControl = null;
         if (currentTool == ToolType.Mouse)
@@ -528,6 +561,12 @@ public partial class Form1 : Form, IMessageFilter
         }
         canvasPictureBox.Focus();
         startPoint = lastPoint = ClampPoint(ToCanvasPoint(e.Location));
+        if (currentTool == ToolType.Eyedropper)
+        {
+            currentColor = canvasBitmap.GetPixel(startPoint.X, startPoint.Y);
+            SelectTool(ToolType.Pencil);
+            return;
+        }
         if (currentTool == ToolType.Fill)
         {
             if (currentDocument.Selection.IsEmpty) FillArea(startPoint);
@@ -550,6 +589,7 @@ public partial class Form1 : Form, IMessageFilter
         }
         if (currentTool == ToolType.Selection) ClearSelection();
         isDrawing = true;
+        constrainShape = (ModifierKeys & Keys.Shift) != 0;
         canvasPictureBox.Capture = true;
         if (currentTool is ToolType.Pencil or ToolType.Eraser)
         {
@@ -574,6 +614,17 @@ public partial class Form1 : Form, IMessageFilter
         if (sender == canvasPanel) return;
         Point canvasPoint = ToCanvasPoint(e.Location);
         coordinatesStatusLabel.Text = $"X: {canvasPoint.X}, Y: {canvasPoint.Y}";
+        if (pastedBitmap != null)
+        {
+            if (isDraggingPaste)
+            {
+                pasteBounds.Location = ClampImageLocation(
+                    new Point(canvasPoint.X - pasteDragOffset.X, canvasPoint.Y - pasteDragOffset.Y), pasteBounds.Size);
+                canvasPictureBox.Invalidate();
+            }
+            canvasPictureBox.Cursor = pasteBounds.Contains(canvasPoint) ? Cursors.SizeAll : Cursors.Cross;
+            return;
+        }
         if (!isDrawing)
         {
             if (currentTool == ToolType.Selection)
@@ -597,11 +648,19 @@ public partial class Form1 : Form, IMessageFilter
             graphics.DrawLine(pen, lastPoint, point);
         }
         lastPoint = point;
+        constrainShape = (ModifierKeys & Keys.Shift) != 0;
         canvasPictureBox.Invalidate();
     }
 
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)
     {
+        if (e.Button == MouseButtons.Left && isDraggingPaste)
+        {
+            Canvas_MouseMove(sender, e);
+            isDraggingPaste = false;
+            canvasPictureBox.Capture = false;
+            return;
+        }
         if (e.Button == MouseButtons.Left && isPanning)
         {
             UpdateCanvasPan(sender, e);
@@ -617,6 +676,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         EndCanvasPan();
         FinishInlineText(true);
+        FinishPaste(true);
         if (!isDrawing) return;
         bool startTextEditor = currentTool == ToolType.Text;
         Rectangle textBounds = startTextEditor ? GetSelectionBounds() : Rectangle.Empty;
@@ -674,7 +734,8 @@ public partial class Form1 : Form, IMessageFilter
             graphics.FillRectangle(Brushes.White, moveSource);
             graphics.DrawImageUnscaled(movingBitmap, moveDestination.Location);
         }
-        Rectangle selection = movingBitmap != null ? moveDestination
+        if (pastedBitmap != null) graphics.DrawImageUnscaled(pastedBitmap, pasteBounds.Location);
+        Rectangle selection = pastedBitmap != null ? pasteBounds : movingBitmap != null ? moveDestination
             : isDrawing && currentTool is ToolType.Selection or ToolType.Text
                 ? GetSelectionBounds() : currentDocument.Selection;
         if (!selection.IsEmpty)
@@ -718,6 +779,7 @@ public partial class Form1 : Form, IMessageFilter
         inlineTextPanel.BringToFront();
         inlineTextEditor.Focus();
         toolStatusLabel.Text = "Текст: Ctrl+Enter — применить, Esc — отменить";
+        UpdateSelectionButtons();
     }
 
     private void UpdateInlineTextFont()
@@ -849,6 +911,7 @@ public partial class Form1 : Form, IMessageFilter
             using StringFormat format = new() { Alignment = textHorizontalAlignment };
             graphics.DrawString(text, font, brush, layout, format);
         }
+        UpdateSelectionButtons();
         UpdateStatus();
         canvasPictureBox.Invalidate();
     }
@@ -863,6 +926,8 @@ public partial class Form1 : Form, IMessageFilter
     private void UpdateSelectionButtons()
     {
         eraseSelectionButton.Enabled = eraseSelectionMenuItem.Enabled = !currentDocument.Selection.IsEmpty;
+        copyImageMenuItem.Enabled = cutImageMenuItem.Enabled = pastedBitmap != null || !currentDocument.Selection.IsEmpty
+            || inlineTextEditor != null;
     }
 
     private void ClearSelection()
@@ -890,6 +955,8 @@ public partial class Form1 : Form, IMessageFilter
 
     private void DrawShape(Graphics graphics, Point first, Point second)
     {
+        if (constrainShape && currentTool is ToolType.Rectangle or ToolType.Ellipse)
+            second = ConstrainShapePoint(first, second);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using Pen pen = CreateDrawingPen();
         Rectangle bounds = new(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y),
@@ -1033,6 +1100,11 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Undo_Click(object? sender, EventArgs e)
     {
+        if (pastedBitmap != null)
+        {
+            FinishPaste(false);
+            return;
+        }
         FinishDrawing();
         if (undoStack.Count == 0) return;
         PushHistory(redoStack, currentDocument.RedoVersions, (Bitmap)canvasBitmap.Clone(), currentDocument.CurrentVersion);
@@ -1044,6 +1116,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Redo_Click(object? sender, EventArgs e)
     {
+        FinishPaste(false);
         FinishDrawing();
         if (redoStack.Count == 0) return;
         PushHistory(undoStack, currentDocument.UndoVersions, (Bitmap)canvasBitmap.Clone(), currentDocument.CurrentVersion);
@@ -1055,7 +1128,7 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateHistoryButtons()
     {
-        undoButton.Enabled = undoMenuItem.Enabled = undoStack.Count > 0;
+        undoButton.Enabled = undoMenuItem.Enabled = pastedBitmap != null || undoStack.Count > 0;
         redoButton.Enabled = redoMenuItem.Enabled = redoStack.Count > 0;
     }
 
