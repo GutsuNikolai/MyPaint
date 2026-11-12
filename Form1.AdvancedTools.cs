@@ -48,17 +48,14 @@ public partial class Form1
         if (currentDocument.Selection.IsEmpty) return;
         Rectangle bounds = currentDocument.Selection;
         Bitmap cropped = new(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-        using Bitmap composite = RenderComposite(currentDocument);
         using (Graphics graphics = Graphics.FromImage(cropped))
         {
             graphics.Clear(Color.White);
             graphics.TranslateTransform(-bounds.X, -bounds.Y);
             if (currentDocument.SelectionPath != null) graphics.SetClip(currentDocument.SelectionPath);
-            graphics.DrawImageUnscaled(composite, Point.Empty);
+            graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
         }
         SaveUndoState();
-        DisposeObjects(currentDocument.Objects);
-        currentDocument.Objects.Clear();
         ReplaceCanvas(cropped);
     }
 

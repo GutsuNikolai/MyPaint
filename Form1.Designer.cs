@@ -22,8 +22,6 @@ partial class Form1
     private ToolStripMenuItem cropMenuItem = null!;
     private ToolStripMenuItem copyImageMenuItem = null!;
     private ToolStripMenuItem cutImageMenuItem = null!;
-    private ToolStripMenuItem bringForwardMenuItem = null!;
-    private ToolStripMenuItem sendBackwardMenuItem = null!;
     private Label widthLabel = null!;
     private NumericUpDown widthInput = null!;
     private TrackBar widthSlider = null!;

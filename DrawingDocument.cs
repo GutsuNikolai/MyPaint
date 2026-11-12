@@ -10,9 +10,6 @@ internal sealed class DrawingDocument : IDisposable
     public string? FilePath { get; set; }
     public Rectangle Selection { get; set; }
     public GraphicsPath? SelectionPath { get; set; }
-    public List<CanvasObject> Objects { get; } = new();
-    public Stack<List<CanvasObject>> UndoObjects { get; } = new();
-    public Stack<List<CanvasObject>> RedoObjects { get; } = new();
     public int ZoomIndex { get; set; } = 4; // 100% in the zoom level list.
     // History remembers versions so Undo can return to the saved state.
     public long CurrentVersion { get; set; }
@@ -35,17 +32,9 @@ internal sealed class DrawingDocument : IDisposable
     {
         Bitmap.Dispose();
         SelectionPath?.Dispose();
-        DisposeObjects(Objects);
-        while (UndoObjects.Count > 0) DisposeObjects(UndoObjects.Pop());
-        while (RedoObjects.Count > 0) DisposeObjects(RedoObjects.Pop());
         while (UndoStack.Count > 0) UndoStack.Pop().Dispose();
         while (RedoStack.Count > 0) RedoStack.Pop().Dispose();
         UndoVersions.Clear();
         RedoVersions.Clear();
-    }
-
-    private static void DisposeObjects(IEnumerable<CanvasObject> objects)
-    {
-        foreach (CanvasObject item in objects) item.Dispose();
     }
 }

@@ -22,26 +22,12 @@ public partial class Form1
         ToolStripMenuItem paste = new("Paste", null, PasteImage_Click) { ShortcutKeyDisplayString = "Ctrl+V" };
         ToolStripMenuItem delete = new("Delete", null, DeleteCanvasContent) { ShortcutKeyDisplayString = "Del" };
         ToolStripMenuItem crop = new("Crop inserted image", null, BeginPasteCrop);
-        bringForwardMenuItem = new ToolStripMenuItem("Move Up", null, (_, _) => MoveSelectedObject(1)) { Enabled = false };
-        sendBackwardMenuItem = new ToolStripMenuItem("Move Down", null, (_, _) => MoveSelectedObject(-1)) { Enabled = false };
-        menu.Items.AddRange(new ToolStripItem[]
-        {
-            cut, copy, paste, delete, new ToolStripSeparator(), crop,
-            new ToolStripSeparator(), bringForwardMenuItem, sendBackwardMenuItem
-        });
+        menu.Items.AddRange(new ToolStripItem[] { cut, copy, paste, delete, new ToolStripSeparator(), crop });
         menu.Opening += (_, _) =>
         {
-            Point client = canvasPictureBox.PointToClient(Cursor.Position);
-            if (canvasPictureBox.ClientRectangle.Contains(client) && pastedBitmap == null)
-            {
-                CanvasObject? hit = HitTestObject(ToCanvasPoint(client));
-                selectedObject = hit;
-                canvasPictureBox.Invalidate();
-            }
-            bool hasContent = pastedBitmap != null || selectedObject != null || !currentDocument.Selection.IsEmpty;
+            bool hasContent = pastedBitmap != null || !currentDocument.Selection.IsEmpty;
             cut.Enabled = copy.Enabled = delete.Enabled = hasContent;
             crop.Enabled = pastedBitmap != null;
-            UpdateObjectCommands();
             try { paste.Enabled = Clipboard.ContainsImage() || Clipboard.ContainsFileDropList()
                     || Clipboard.GetDataObject()?.GetDataPresent("PNG") == true; }
             catch (ExternalException) { paste.Enabled = true; }
@@ -52,7 +38,6 @@ public partial class Form1
     private void DeleteCanvasContent(object? sender, EventArgs e)
     {
         if (pastedBitmap != null) FinishPaste(false);
-        else if (selectedObject != null) DeleteSelectedObject();
         else EraseSelection_Click(sender, e);
     }
 
@@ -126,17 +111,6 @@ public partial class Form1
             catch (ExternalException exception) { ShowClipboardError(exception); }
             return;
         }
-        if (selectedObject != null && currentDocument.Objects.Contains(selectedObject))
-        {
-            try
-            {
-                using Bitmap image = (Bitmap)selectedObject.Image.Clone();
-                PutBitmapOnClipboard(image);
-                if (cut) DeleteSelectedObject();
-            }
-            catch (ExternalException exception) { ShowClipboardError(exception); }
-            return;
-        }
         FinishDrawing();
         Rectangle bounds = currentDocument.Selection;
         if (bounds.IsEmpty) return;
@@ -154,14 +128,13 @@ public partial class Form1
 
     private Bitmap CopySelectedPixels(Rectangle bounds)
     {
-        using Bitmap composite = RenderComposite(currentDocument);
         if (currentDocument.SelectionPath == null)
-            return composite.Clone(bounds, PixelFormat.Format32bppArgb);
+            return canvasBitmap.Clone(bounds, PixelFormat.Format32bppArgb);
         Bitmap image = new(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
         using Graphics graphics = Graphics.FromImage(image);
         graphics.TranslateTransform(-bounds.X, -bounds.Y);
         graphics.SetClip(currentDocument.SelectionPath);
-        graphics.DrawImageUnscaled(composite, Point.Empty);
+        graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
         return image;
     }
 
@@ -279,7 +252,7 @@ public partial class Form1
     private void FinishPaste(bool commit)
     {
         if (pastedBitmap == null) return;
-        Bitmap image = pastedBitmap;
+        using Bitmap image = pastedBitmap;
         pastedBitmap = null;
         isDraggingPaste = false;
         isCroppingPaste = false;
@@ -288,9 +261,11 @@ public partial class Form1
         if (commit)
         {
             SaveUndoState();
-            AddObject(new CanvasObject("Изображение", image, pasteBounds));
+            using Graphics graphics = Graphics.FromImage(canvasBitmap);
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(image, pasteBounds);
+            currentDocument.Selection = pasteBounds;
         }
-        else image.Dispose();
         canvasPictureBox.Cursor = Cursors.Cross;
         UpdateSelectionButtons();
         UpdateHistoryButtons();
@@ -414,30 +389,13 @@ public partial class Form1
             canvasPictureBox.Invalidate();
             return;
         }
-        if (selectedObject != null && currentDocument.Objects.Contains(selectedObject))
-        {
-            SaveUndoState();
-            selectedObject.Image.RotateFlip(transform);
-            if (transform is RotateFlipType.Rotate90FlipNone or RotateFlipType.Rotate270FlipNone
-                or RotateFlipType.Rotate90FlipX or RotateFlipType.Rotate90FlipY
-                or RotateFlipType.Rotate270FlipX or RotateFlipType.Rotate270FlipY)
-            {
-                Rectangle oldBounds = selectedObject.Bounds;
-                Size size = new(oldBounds.Height, oldBounds.Width);
-                selectedObject.Bounds = new Rectangle(ClampImageLocation(oldBounds.Location, size), size);
-            }
-            canvasPictureBox.Invalidate();
-            return;
-        }
         FinishDrawing();
         Rectangle selection = currentDocument.Selection;
-        using Bitmap image = selection.IsEmpty ? RenderComposite(currentDocument) : CopySelectedPixels(selection);
+        using Bitmap image = selection.IsEmpty ? (Bitmap)canvasBitmap.Clone() : CopySelectedPixels(selection);
         image.RotateFlip(transform);
         if (selection.IsEmpty)
         {
             SaveUndoState();
-            DisposeObjects(currentDocument.Objects);
-            currentDocument.Objects.Clear();
             ReplaceCanvas((Bitmap)image.Clone());
         }
         else
@@ -445,7 +403,6 @@ public partial class Form1
             using Bitmap fitted = CreateFittedBitmap(image);
             Rectangle destination = new(ClampImageLocation(selection.Location, fitted.Size), fitted.Size);
             SaveUndoState();
-            FlattenObjectsWithoutHistory();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             if (currentDocument.SelectionPath != null) graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
             else graphics.FillRectangle(Brushes.White, selection);
