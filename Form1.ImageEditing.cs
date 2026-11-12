@@ -6,6 +6,62 @@ namespace Paint;
 
 public partial class Form1
 {
+    private enum PasteDragMode
+    {
+        None, Move, ResizeNorthWest, ResizeNorthEast, ResizeSouthWest, ResizeSouthEast, Crop
+    }
+
+    private ContextMenuStrip CreateCanvasContextMenu()
+    {
+        ContextMenuStrip menu = new(components!)
+        {
+            Renderer = new PageMenuRenderer(), BackColor = UiTheme.Surface, Font = Font
+        };
+        ToolStripMenuItem cut = new("Cut", null, (_, _) => CopyImage(true)) { ShortcutKeyDisplayString = "Ctrl+X" };
+        ToolStripMenuItem copy = new("Copy", null, (_, _) => CopyImage(false)) { ShortcutKeyDisplayString = "Ctrl+C" };
+        ToolStripMenuItem paste = new("Paste", null, PasteImage_Click) { ShortcutKeyDisplayString = "Ctrl+V" };
+        ToolStripMenuItem delete = new("Delete", null, DeleteCanvasContent) { ShortcutKeyDisplayString = "Del" };
+        ToolStripMenuItem crop = new("Crop inserted image", null, BeginPasteCrop);
+        menu.Items.AddRange(new ToolStripItem[] { cut, copy, paste, delete, new ToolStripSeparator(), crop });
+        menu.Opening += (_, _) =>
+        {
+            bool hasContent = pastedBitmap != null || !currentDocument.Selection.IsEmpty;
+            cut.Enabled = copy.Enabled = delete.Enabled = hasContent;
+            crop.Enabled = pastedBitmap != null;
+            try { paste.Enabled = Clipboard.ContainsImage() || Clipboard.ContainsFileDropList()
+                    || Clipboard.GetDataObject()?.GetDataPresent("PNG") == true; }
+            catch (ExternalException) { paste.Enabled = true; }
+        };
+        return menu;
+    }
+
+    private void DeleteCanvasContent(object? sender, EventArgs e)
+    {
+        if (pastedBitmap != null) FinishPaste(false);
+        else EraseSelection_Click(sender, e);
+    }
+
+    private void BeginPasteCrop(object? sender, EventArgs e)
+    {
+        if (pastedBitmap == null) return;
+        isCroppingPaste = true;
+        pasteCropBounds = Rectangle.Empty;
+        toolStatusLabel.Text = "Crop: выделите нужную часть вставленного изображения; Esc — отменить crop";
+        canvasPictureBox.Cursor = Cursors.Cross;
+        canvasPictureBox.Invalidate();
+    }
+
+    private void CancelPasteCrop()
+    {
+        isCroppingPaste = false;
+        pasteCropBounds = Rectangle.Empty;
+        pasteDragMode = PasteDragMode.None;
+        isDraggingPaste = false;
+        canvasPictureBox.Capture = false;
+        UpdateStatus();
+        canvasPictureBox.Invalidate();
+    }
+
     private ToolStripMenuItem CreateImageMenu()
     {
         ToolStripMenuItem menu = new("Image");
@@ -42,26 +98,50 @@ public partial class Form1
             inlineTextEditor.Focus();
             return;
         }
+        if (pastedBitmap != null)
+        {
+            try
+            {
+                using Bitmap image = RenderPastedBitmap();
+                PutBitmapOnClipboard(image);
+                if (cut) FinishPaste(false);
+            }
+            catch (ExternalException exception) { ShowClipboardError(exception); }
+            return;
+        }
         FinishDrawing();
         Rectangle bounds = currentDocument.Selection;
         if (bounds.IsEmpty) return;
         try
         {
             using Bitmap image = canvasBitmap.Clone(bounds, PixelFormat.Format32bppArgb);
-            using MemoryStream png = new();
-            image.Save(png, ImageFormat.Png);
-            png.Position = 0;
-            DataObject data = new();
-            data.SetData(DataFormats.Bitmap, image);
-            data.SetData("PNG", png);
-            // Persist both formats before disposing the local image and stream.
-            Clipboard.SetDataObject(data, true);
+            PutBitmapOnClipboard(image);
             if (cut) PaintSelection(Color.White);
         }
         catch (ExternalException exception)
         {
             ShowClipboardError(exception);
         }
+    }
+
+    private static void PutBitmapOnClipboard(Bitmap image)
+    {
+        using MemoryStream png = new();
+        image.Save(png, ImageFormat.Png);
+        png.Position = 0;
+        DataObject data = new();
+        data.SetData(DataFormats.Bitmap, image);
+        data.SetData("PNG", png);
+        Clipboard.SetDataObject(data, true);
+    }
+
+    private Bitmap RenderPastedBitmap()
+    {
+        Bitmap rendered = new(pasteBounds.Width, pasteBounds.Height, PixelFormat.Format32bppArgb);
+        using Graphics graphics = Graphics.FromImage(rendered);
+        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        graphics.DrawImage(pastedBitmap!, new Rectangle(Point.Empty, rendered.Size));
+        return rendered;
     }
 
     private static Image? ReadClipboardImage()
@@ -162,12 +242,15 @@ public partial class Form1
         using Bitmap image = pastedBitmap;
         pastedBitmap = null;
         isDraggingPaste = false;
+        isCroppingPaste = false;
+        pasteDragMode = PasteDragMode.None;
         canvasPictureBox.Capture = false;
         if (commit)
         {
             SaveUndoState();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
-            graphics.DrawImageUnscaled(image, pasteBounds.Location);
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(image, pasteBounds);
             currentDocument.Selection = pasteBounds;
         }
         canvasPictureBox.Cursor = Cursors.Cross;
@@ -175,6 +258,109 @@ public partial class Form1
         UpdateHistoryButtons();
         UpdateStatus();
         canvasPictureBox.Invalidate();
+    }
+
+    private PasteDragMode HitTestPasteHandle(Point point)
+    {
+        int radius = Math.Max(3, (int)Math.Ceiling(7 / ZoomFactor));
+        if (Near(point, pasteBounds.Left, pasteBounds.Top, radius)) return PasteDragMode.ResizeNorthWest;
+        if (Near(point, pasteBounds.Right, pasteBounds.Top, radius)) return PasteDragMode.ResizeNorthEast;
+        if (Near(point, pasteBounds.Left, pasteBounds.Bottom, radius)) return PasteDragMode.ResizeSouthWest;
+        if (Near(point, pasteBounds.Right, pasteBounds.Bottom, radius)) return PasteDragMode.ResizeSouthEast;
+        return PasteDragMode.None;
+    }
+
+    private static bool Near(Point point, int x, int y, int radius) =>
+        Math.Abs(point.X - x) <= radius && Math.Abs(point.Y - y) <= radius;
+
+    private Cursor GetPasteCursor(Point point)
+    {
+        if (isCroppingPaste) return Cursors.Cross;
+        return HitTestPasteHandle(point) switch
+        {
+            PasteDragMode.ResizeNorthWest or PasteDragMode.ResizeSouthEast => Cursors.SizeNWSE,
+            PasteDragMode.ResizeNorthEast or PasteDragMode.ResizeSouthWest => Cursors.SizeNESW,
+            _ => pasteBounds.Contains(point) ? Cursors.SizeAll : Cursors.Cross
+        };
+    }
+
+    private Rectangle ResizePasteBounds(PasteDragMode mode, Point point)
+    {
+        const int minimum = 4;
+        Rectangle original = pasteDragStartBounds;
+        int left = original.Left, top = original.Top, right = original.Right, bottom = original.Bottom;
+        if (mode is PasteDragMode.ResizeNorthWest or PasteDragMode.ResizeSouthWest)
+            left = Math.Clamp(point.X, 0, right - minimum);
+        else right = Math.Clamp(point.X, left + minimum, canvasBitmap.Width);
+        if (mode is PasteDragMode.ResizeNorthWest or PasteDragMode.ResizeNorthEast)
+            top = Math.Clamp(point.Y, 0, bottom - minimum);
+        else bottom = Math.Clamp(point.Y, top + minimum, canvasBitmap.Height);
+        return Rectangle.FromLTRB(left, top, right, bottom);
+    }
+
+    private Rectangle GetCropBounds(Point first, Point second)
+    {
+        first = ClampPointToRectangle(first, pasteBounds);
+        second = ClampPointToRectangle(second, pasteBounds);
+        return Rectangle.FromLTRB(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y),
+            Math.Max(first.X, second.X) + 1, Math.Max(first.Y, second.Y) + 1);
+    }
+
+    private static Point ClampPointToRectangle(Point point, Rectangle bounds) => new(
+        Math.Clamp(point.X, bounds.Left, bounds.Right - 1),
+        Math.Clamp(point.Y, bounds.Top, bounds.Bottom - 1));
+
+    private void ApplyPasteCrop()
+    {
+        if (pastedBitmap == null || pasteCropBounds.Width < 2 || pasteCropBounds.Height < 2)
+        {
+            CancelPasteCrop();
+            return;
+        }
+        Rectangle source = new(
+            (int)Math.Floor((pasteCropBounds.Left - pasteBounds.Left) * pastedBitmap.Width / (double)pasteBounds.Width),
+            (int)Math.Floor((pasteCropBounds.Top - pasteBounds.Top) * pastedBitmap.Height / (double)pasteBounds.Height),
+            Math.Max(1, (int)Math.Ceiling(pasteCropBounds.Width * pastedBitmap.Width / (double)pasteBounds.Width)),
+            Math.Max(1, (int)Math.Ceiling(pasteCropBounds.Height * pastedBitmap.Height / (double)pasteBounds.Height)));
+        source.Intersect(new Rectangle(Point.Empty, pastedBitmap.Size));
+        Bitmap cropped = pastedBitmap.Clone(source, PixelFormat.Format32bppArgb);
+        pastedBitmap.Dispose();
+        pastedBitmap = cropped;
+        pasteBounds = pasteCropBounds;
+        isCroppingPaste = false;
+        pasteCropBounds = Rectangle.Empty;
+        UpdateStatus();
+        canvasPictureBox.Invalidate();
+    }
+
+    private void DrawPasteAdorners(Graphics graphics)
+    {
+        float size = Math.Max(4, 8 / ZoomFactor);
+        using Brush handle = new SolidBrush(UiTheme.Surface);
+        using Pen outline = new(UiTheme.AccentBorder, 1 / ZoomFactor);
+        foreach (Point corner in new[]
+        {
+            new Point(pasteBounds.Left, pasteBounds.Top), new Point(pasteBounds.Right, pasteBounds.Top),
+            new Point(pasteBounds.Left, pasteBounds.Bottom), new Point(pasteBounds.Right, pasteBounds.Bottom)
+        })
+        {
+            RectangleF box = new(corner.X - size / 2, corner.Y - size / 2, size, size);
+            graphics.FillRectangle(handle, box);
+            graphics.DrawRectangle(outline, box.X, box.Y, box.Width, box.Height);
+        }
+        if (isCroppingPaste)
+        {
+            using Brush shade = new SolidBrush(Color.FromArgb(80, Color.Black));
+            using Region outside = new(pasteBounds);
+            if (!pasteCropBounds.IsEmpty) outside.Exclude(pasteCropBounds);
+            graphics.FillRegion(shade, outside);
+            if (!pasteCropBounds.IsEmpty)
+            {
+                using Pen cropPen = new(Color.White, 1 / ZoomFactor) { DashStyle = DashStyle.Dash };
+                graphics.DrawRectangle(cropPen, pasteCropBounds.X, pasteCropBounds.Y,
+                    pasteCropBounds.Width - 1, pasteCropBounds.Height - 1);
+            }
+        }
     }
 
     private void TransformImage(RotateFlipType transform)

@@ -42,6 +42,11 @@ public partial class Form1 : Form, IMessageFilter
     private Rectangle pasteBounds;
     private Point pasteDragOffset;
     private bool isDraggingPaste;
+    private PasteDragMode pasteDragMode;
+    private Rectangle pasteDragStartBounds;
+    private Point pasteDragStartPoint;
+    private bool isCroppingPaste;
+    private Rectangle pasteCropBounds;
     private bool constrainShape;
     private TextBox? inlineTextEditor;
     private Font? inlineTextFont;
@@ -210,8 +215,8 @@ public partial class Form1 : Form, IMessageFilter
 
     private void SetCanvasScrollPosition(int x, int y)
     {
-        int maxX = Math.Max(0, canvasPanel.DisplayRectangle.Width - canvasPanel.ClientSize.Width);
-        int maxY = Math.Max(0, canvasPanel.DisplayRectangle.Height - canvasPanel.ClientSize.Height);
+        int maxX = Math.Max(0, canvasPanel.HorizontalScroll.Maximum - canvasPanel.HorizontalScroll.LargeChange + 1);
+        int maxY = Math.Max(0, canvasPanel.VerticalScroll.Maximum - canvasPanel.VerticalScroll.LargeChange + 1);
         canvasPanel.AutoScrollPosition = new Point(Math.Clamp(x, 0, maxX), Math.Clamp(y, 0, maxY));
         canvasPanel.Invalidate();
     }
@@ -420,6 +425,11 @@ public partial class Form1 : Form, IMessageFilter
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (pastedBitmap != null && isCroppingPaste && keyData == Keys.Escape)
+        {
+            CancelPasteCrop();
+            return true;
+        }
         if (pastedBitmap != null && keyData is Keys.Enter or Keys.Escape or Keys.Delete)
         {
             FinishPaste(keyData == Keys.Enter);
@@ -542,9 +552,29 @@ public partial class Form1 : Form, IMessageFilter
         if (pastedBitmap != null)
         {
             Point point = ClampPoint(ToCanvasPoint(e.Location));
+            if (isCroppingPaste)
+            {
+                pasteDragStartPoint = ClampPointToRectangle(point, pasteBounds);
+                pasteCropBounds = Rectangle.Empty;
+                pasteDragMode = PasteDragMode.Crop;
+                isDraggingPaste = true;
+                canvasPictureBox.Capture = true;
+                return;
+            }
+            PasteDragMode handle = HitTestPasteHandle(point);
+            if (handle != PasteDragMode.None)
+            {
+                pasteDragMode = handle;
+                pasteDragStartPoint = point;
+                pasteDragStartBounds = pasteBounds;
+                isDraggingPaste = true;
+                canvasPictureBox.Capture = true;
+                return;
+            }
             if (pasteBounds.Contains(point))
             {
                 pasteDragOffset = new Point(point.X - pasteBounds.X, point.Y - pasteBounds.Y);
+                pasteDragMode = PasteDragMode.Move;
                 isDraggingPaste = true;
                 canvasPictureBox.Focus();
                 canvasPictureBox.Capture = true;
@@ -618,11 +648,15 @@ public partial class Form1 : Form, IMessageFilter
         {
             if (isDraggingPaste)
             {
-                pasteBounds.Location = ClampImageLocation(
-                    new Point(canvasPoint.X - pasteDragOffset.X, canvasPoint.Y - pasteDragOffset.Y), pasteBounds.Size);
+                if (pasteDragMode == PasteDragMode.Move)
+                    pasteBounds.Location = ClampImageLocation(
+                        new Point(canvasPoint.X - pasteDragOffset.X, canvasPoint.Y - pasteDragOffset.Y), pasteBounds.Size);
+                else if (pasteDragMode == PasteDragMode.Crop)
+                    pasteCropBounds = GetCropBounds(pasteDragStartPoint, canvasPoint);
+                else pasteBounds = ResizePasteBounds(pasteDragMode, canvasPoint);
                 canvasPictureBox.Invalidate();
             }
-            canvasPictureBox.Cursor = pasteBounds.Contains(canvasPoint) ? Cursors.SizeAll : Cursors.Cross;
+            canvasPictureBox.Cursor = GetPasteCursor(canvasPoint);
             return;
         }
         if (!isDrawing)
@@ -658,6 +692,8 @@ public partial class Form1 : Form, IMessageFilter
         {
             Canvas_MouseMove(sender, e);
             isDraggingPaste = false;
+            if (pasteDragMode == PasteDragMode.Crop) ApplyPasteCrop();
+            pasteDragMode = PasteDragMode.None;
             canvasPictureBox.Capture = false;
             return;
         }
@@ -734,7 +770,11 @@ public partial class Form1 : Form, IMessageFilter
             graphics.FillRectangle(Brushes.White, moveSource);
             graphics.DrawImageUnscaled(movingBitmap, moveDestination.Location);
         }
-        if (pastedBitmap != null) graphics.DrawImageUnscaled(pastedBitmap, pasteBounds.Location);
+        if (pastedBitmap != null)
+        {
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(pastedBitmap, pasteBounds);
+        }
         Rectangle selection = pastedBitmap != null ? pasteBounds : movingBitmap != null ? moveDestination
             : isDrawing && currentTool is ToolType.Selection or ToolType.Text
                 ? GetSelectionBounds() : currentDocument.Selection;
@@ -746,6 +786,7 @@ public partial class Form1 : Form, IMessageFilter
             using Pen border = new(Color.Black, 1 / ZoomFactor) { DashStyle = DashStyle.Dash };
             graphics.DrawRectangle(border, selection.X, selection.Y, selection.Width - 1, selection.Height - 1);
         }
+        if (pastedBitmap != null) DrawPasteAdorners(graphics);
     }
 
     private void CancelSelectionMove()
@@ -1011,9 +1052,19 @@ public partial class Form1 : Form, IMessageFilter
             int start = point.Y * width + point.X;
             pixels[start] = replacementColor;
             pending.Enqueue(start);
+            static bool SimilarColor(int color, int target)
+            {
+                Color first = Color.FromArgb(color);
+                Color second = Color.FromArgb(target);
+                const int tolerance = 48;
+                return Math.Abs(first.A - second.A) <= tolerance
+                    && Math.Abs(first.R - second.R) <= tolerance
+                    && Math.Abs(first.G - second.G) <= tolerance
+                    && Math.Abs(first.B - second.B) <= tolerance;
+            }
             void Visit(int index)
             {
-                if (pixels[index] != targetColor) return;
+                if (!SimilarColor(pixels[index], targetColor)) return;
                 pixels[index] = replacementColor;
                 pending.Enqueue(index);
             }
@@ -1080,11 +1131,13 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateCanvasLayout()
     {
+        Point previousScroll = new(-canvasPanel.AutoScrollPosition.X, -canvasPanel.AutoScrollPosition.Y);
+        canvasPanel.AutoScrollPosition = Point.Empty;
         Size displaySize = ToDisplayBounds(new Rectangle(Point.Empty, canvasBitmap.Size)).Size;
         canvasPanel.AutoScrollMinSize = new Size(displaySize.Width + CanvasMargin * 2, displaySize.Height + CanvasMargin * 2);
         canvasPictureBox.Size = displaySize;
-        Point scroll = canvasPanel.AutoScrollPosition;
-        canvasPictureBox.Location = new Point(CanvasMargin + scroll.X, CanvasMargin + scroll.Y);
+        canvasPictureBox.Location = new Point(CanvasMargin, CanvasMargin);
+        SetCanvasScrollPosition(previousScroll.X, previousScroll.Y);
         zoomStatusLabel.Text = $"Масштаб: {ZoomLevels[currentDocument.ZoomIndex]}%";
         canvasPanel.Invalidate();
     }

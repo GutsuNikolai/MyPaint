@@ -34,6 +34,7 @@ partial class Form1
     private ToolStripStatusLabel zoomStatusLabel = null!;
     private ToolStripStatusLabel coordinatesStatusLabel = null!;
     private ContextMenuStrip pageContextMenu = null!;
+    private ContextMenuStrip canvasContextMenu = null!;
     private Font? documentTabFont;
 
     protected override void Dispose(bool disposing)
@@ -280,6 +281,9 @@ partial class Form1
             Location = Point.Empty, Size = new Size(1, 1), TabStop = true,
             BackColor = Color.White, SizeMode = PictureBoxSizeMode.StretchImage
         };
+        canvasContextMenu = CreateCanvasContextMenu();
+        canvasPictureBox.ContextMenuStrip = canvasContextMenu;
+        canvasPanel.ContextMenuStrip = canvasContextMenu;
         canvasPanel.Controls.Add(canvasPictureBox);
         canvasPictureBox.MouseDown += Canvas_MouseDown;
         canvasPictureBox.MouseMove += Canvas_MouseMove;
