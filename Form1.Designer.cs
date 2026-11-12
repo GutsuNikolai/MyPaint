@@ -58,6 +58,8 @@ partial class Form1
             movingBitmap = null;
             pastedBitmap?.Dispose();
             pastedBitmap = null;
+            pasteOriginalCanvasState?.Dispose();
+            pasteOriginalCanvasState = null;
             if (canvasPictureBox != null) canvasPictureBox.Image = null;
             foreach (DrawingDocument document in documents) document.Dispose();
             documents.Clear();

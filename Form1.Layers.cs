@@ -228,13 +228,28 @@ public partial class Form1
         const int maximum = 16384;
         Point canvasPoint = ToCanvasPoint(displayPoint);
         int width = canvasResizeMode is CanvasResizeMode.Width or CanvasResizeMode.Both
-            ? Math.Clamp(canvasPoint.X + 1, canvasResizeStartSize.Width, maximum)
+            ? Math.Clamp(SnapCanvasSize(canvasPoint.X + 1, canvasResizeStartSize.Width), canvasResizeStartSize.Width, maximum)
             : canvasResizeStartSize.Width;
         int height = canvasResizeMode is CanvasResizeMode.Height or CanvasResizeMode.Both
-            ? Math.Clamp(canvasPoint.Y + 1, canvasResizeStartSize.Height, maximum)
+            ? Math.Clamp(SnapCanvasSize(canvasPoint.Y + 1, canvasResizeStartSize.Height), canvasResizeStartSize.Height, maximum)
             : canvasResizeStartSize.Height;
-        canvasResizePreviewSize = new Size(width, height);
+        Size size = new(width, height);
+        if (size == canvasResizePreviewSize) return;
+        canvasResizePreviewSize = size;
+        Size displaySize = ToDisplayBounds(new Rectangle(Point.Empty, size)).Size;
+        canvasPictureBox.Size = displaySize;
+        canvasPanel.AutoScrollMinSize = new Size(displaySize.Width + CanvasMargin * 2,
+            displaySize.Height + CanvasMargin * 2);
         toolStatusLabel.Text = $"Новый размер холста: {width} × {height} px";
+        canvasPictureBox.Invalidate();
+        canvasPanel.Invalidate();
+    }
+
+    private static int SnapCanvasSize(int value, int minimum)
+    {
+        const int step = 5;
+        int delta = Math.Max(0, value - minimum);
+        return minimum + (int)Math.Round(delta / (double)step) * step;
     }
 
     private void FinishCanvasResize()
@@ -250,27 +265,29 @@ public partial class Form1
     {
         canvasResizeMode = CanvasResizeMode.None;
         canvasResizePreviewSize = Size.Empty;
+        UpdateCanvasLayout();
         UpdateStatus();
     }
 
     private void DrawCanvasResizeHandles(Graphics graphics)
     {
-        if (pastedBitmap != null || canvasResizeMode != CanvasResizeMode.None) return;
+        if (pastedBitmap != null) return;
+        Size canvasSize = canvasResizeMode == CanvasResizeMode.None ? canvasBitmap.Size : canvasResizePreviewSize;
         float size = Math.Max(5, 9 / ZoomFactor);
-        float right = canvasBitmap.Width - 1;
-        float bottom = canvasBitmap.Height - 1;
+        float right = canvasSize.Width - 1;
+        float bottom = canvasSize.Height - 1;
         using Brush brush = new SolidBrush(UiTheme.AccentBorder);
         graphics.FillPolygon(brush, new[]
         {
-            new PointF(right - size, canvasBitmap.Height / 2f - size),
-            new PointF(right, canvasBitmap.Height / 2f),
-            new PointF(right - size, canvasBitmap.Height / 2f + size)
+            new PointF(right - size, canvasSize.Height / 2f - size),
+            new PointF(right, canvasSize.Height / 2f),
+            new PointF(right - size, canvasSize.Height / 2f + size)
         });
         graphics.FillPolygon(brush, new[]
         {
-            new PointF(canvasBitmap.Width / 2f - size, bottom - size),
-            new PointF(canvasBitmap.Width / 2f, bottom),
-            new PointF(canvasBitmap.Width / 2f + size, bottom - size)
+            new PointF(canvasSize.Width / 2f - size, bottom - size),
+            new PointF(canvasSize.Width / 2f, bottom),
+            new PointF(canvasSize.Width / 2f + size, bottom - size)
         });
         graphics.FillPolygon(brush, new[]
         {

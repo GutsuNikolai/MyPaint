@@ -49,6 +49,8 @@ public partial class Form1 : Form, IMessageFilter
     private Point pasteDragStartPoint;
     private bool isCroppingPaste;
     private Rectangle pasteCropBounds;
+    private DrawingState? pasteOriginalCanvasState;
+    private long pasteOriginalVersion;
     private bool constrainShape;
     private bool layerShortcutPending;
     private DateTime layerShortcutDeadline;
@@ -1301,8 +1303,12 @@ public partial class Form1 : Form, IMessageFilter
 
     private void SaveUndoState()
     {
-        PushHistory(undoStack, currentDocument.UndoVersions,
-            currentDocument.CaptureState(), currentDocument.CurrentVersion);
+        RegisterUndoState(currentDocument.CaptureState(), currentDocument.CurrentVersion);
+    }
+
+    private void RegisterUndoState(DrawingState state, long version)
+    {
+        PushHistory(undoStack, currentDocument.UndoVersions, state, version);
         DisposeHistory(redoStack);
         currentDocument.RedoVersions.Clear();
         currentDocument.CurrentVersion = ++currentDocument.LastVersion;

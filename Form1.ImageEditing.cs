@@ -210,6 +210,20 @@ public partial class Form1
                 Math.Max(0, (int)Math.Ceiling(-canvasPictureBox.Left / ZoomFactor)),
                 Math.Max(0, (int)Math.Ceiling(-canvasPictureBox.Top / ZoomFactor)));
             pasteBounds = new Rectangle(ClampImageLocation(visibleCorner, pastedBitmap.Size), pastedBitmap.Size);
+            Size requiredSize = new(Math.Max(canvasBitmap.Width, pasteBounds.Right),
+                Math.Max(canvasBitmap.Height, pasteBounds.Bottom));
+            if (requiredSize != canvasBitmap.Size)
+            {
+                pasteOriginalCanvasState = currentDocument.CaptureState();
+                pasteOriginalVersion = currentDocument.CurrentVersion;
+                try { ResizeAllLayers(requiredSize, false); }
+                catch
+                {
+                    pasteOriginalCanvasState.Dispose();
+                    pasteOriginalCanvasState = null;
+                    throw;
+                }
+            }
             UpdateSelectionButtons();
             UpdateHistoryButtons();
             UpdateStatus();
@@ -262,14 +276,25 @@ public partial class Form1
         canvasPictureBox.Capture = false;
         if (commit)
         {
-            Size requiredSize = new(Math.Max(canvasBitmap.Width, pasteBounds.Right),
-                Math.Max(canvasBitmap.Height, pasteBounds.Bottom));
-            if (requiredSize != canvasBitmap.Size) ResizeAllLayers(requiredSize, true);
+            if (pasteOriginalCanvasState != null)
+            {
+                RegisterUndoState(pasteOriginalCanvasState, pasteOriginalVersion);
+                pasteOriginalCanvasState = null;
+            }
             else SaveUndoState();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
             graphics.DrawImage(image, pasteBounds);
             currentDocument.Selection = pasteBounds;
+        }
+        else if (pasteOriginalCanvasState != null)
+        {
+            currentDocument.RestoreState(pasteOriginalCanvasState);
+            pasteOriginalCanvasState.Dispose();
+            pasteOriginalCanvasState = null;
+            currentDocument.CurrentVersion = pasteOriginalVersion;
+            ClearSelection();
+            UpdateCanvasLayout();
         }
         canvasPictureBox.Cursor = Cursors.Cross;
         UpdateSelectionButtons();
