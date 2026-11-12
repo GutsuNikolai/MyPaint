@@ -214,7 +214,6 @@ public partial class Form1
             UpdateHistoryButtons();
             UpdateStatus();
             canvasPictureBox.Invalidate();
-            canvasPictureBox.Focus();
         }
         catch (Exception exception) when (exception is ExternalException or ArgumentException
             or IOException or OutOfMemoryException or UnauthorizedAccessException)

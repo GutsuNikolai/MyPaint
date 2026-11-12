@@ -129,7 +129,8 @@ partial class Form1
         {
             Dock = DockStyle.Top, Renderer = new PageMenuRenderer(),
             BackColor = UiTheme.Background, ForeColor = UiTheme.Text,
-            Font = Font, Padding = new Padding(12, 1, 12, 1), ShowItemToolTips = true
+            Font = Font, Padding = new Padding(12, 0, 12, 0), ShowItemToolTips = true,
+            AutoSize = false, Height = 26
         };
         pageContextMenu = new ContextMenuStrip(components)
         {
@@ -358,9 +359,9 @@ partial class Form1
         {
             if (!canvasPanel.Capture) EndCanvasPan();
         };
-        canvasPictureBox = new PictureBox
+        canvasPictureBox = new CanvasPictureBox
         {
-            Location = Point.Empty, Size = new Size(1, 1), TabStop = true,
+            Location = Point.Empty, Size = new Size(1, 1), TabStop = false,
             BackColor = Color.White, SizeMode = PictureBoxSizeMode.StretchImage
         };
         canvasContextMenu = CreateCanvasContextMenu();
@@ -401,9 +402,9 @@ partial class Form1
         });
 
         Controls.Add(canvasPanel);
+        Controls.Add(pageStrip);
         Controls.Add(widthPanel);
         Controls.Add(toolbar);
-        Controls.Add(pageStrip);
         Controls.Add(menu);
         Controls.Add(status);
         ResumeLayout(true);

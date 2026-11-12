@@ -139,10 +139,10 @@ public partial class Form1 : Form, IMessageFilter
         if (isCopy) document.CurrentVersion = document.LastVersion = 1;
         documents.Add(document);
         documentTabFont ??= new Font(MainMenuStrip!.Font.FontFamily,
-            MainMenuStrip.Font.Size * 1.5f, MainMenuStrip.Font.Style, MainMenuStrip.Font.Unit);
+            MainMenuStrip.Font.Size * 1.15f, MainMenuStrip.Font.Style, MainMenuStrip.Font.Unit);
         ToolStripMenuItem tab = new(document.Number.ToString())
         {
-            Font = documentTabFont, Tag = document, Padding = new Padding(14, 4, 14, 4), Margin = new Padding(3, 0, 3, 0)
+            Font = documentTabFont, Tag = document, Padding = new Padding(10, 1, 10, 1), Margin = new Padding(3, 0, 3, 0)
         };
         tab.Click += (_, _) =>
         {
@@ -221,7 +221,6 @@ public partial class Form1 : Form, IMessageFilter
         int maxX = Math.Max(0, canvasPanel.HorizontalScroll.Maximum - canvasPanel.HorizontalScroll.LargeChange + 1);
         int maxY = Math.Max(0, canvasPanel.VerticalScroll.Maximum - canvasPanel.VerticalScroll.LargeChange + 1);
         canvasPanel.AutoScrollPosition = new Point(Math.Clamp(x, 0, maxX), Math.Clamp(y, 0, maxY));
-        canvasPanel.Invalidate();
     }
 
     private Point GetViewportPoint(object? sender, Point point) =>
@@ -394,7 +393,6 @@ public partial class Form1 : Form, IMessageFilter
         else textOptionsWindow.Hide();
         canvasPictureBox.Cursor = tool == ToolType.Mouse ? Cursors.Default : tool == ToolType.Text ? Cursors.IBeam
             : tool == ToolType.Eraser ? Cursors.Hand : Cursors.Cross;
-        canvasPictureBox.Focus();
         UpdateStatus();
     }
 
@@ -602,7 +600,6 @@ public partial class Form1 : Form, IMessageFilter
                 pasteDragOffset = new Point(point.X - pasteBounds.X, point.Y - pasteBounds.Y);
                 pasteDragMode = PasteDragMode.Move;
                 isDraggingPaste = true;
-                canvasPictureBox.Focus();
                 canvasPictureBox.Capture = true;
                 return;
             }
@@ -615,7 +612,6 @@ public partial class Form1 : Form, IMessageFilter
             BeginCanvasPan(sender, e);
             return;
         }
-        canvasPictureBox.Focus();
         startPoint = lastPoint = ClampPoint(ToCanvasPoint(e.Location));
         if (currentTool == ToolType.Eyedropper)
         {
@@ -1173,7 +1169,9 @@ public partial class Form1 : Form, IMessageFilter
             {
                 Color first = Color.FromArgb(color);
                 Color second = Color.FromArgb(target);
-                const int tolerance = 48;
+                // Anti-aliased outlines contain a wide gray fringe. Keep only the dark
+                // core as a barrier so the light dotted fringe becomes part of the fill.
+                const int tolerance = 128;
                 return Math.Abs(first.A - second.A) <= tolerance
                     && Math.Abs(first.R - second.R) <= tolerance
                     && Math.Abs(first.G - second.G) <= tolerance
