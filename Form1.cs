@@ -124,8 +124,6 @@ public partial class Form1 : Form, IMessageFilter
     {
         Size size = GetNewCanvasSize();
         Bitmap bitmap = new(size.Width, size.Height, PixelFormat.Format32bppArgb);
-        using Graphics graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(Color.White);
         return bitmap;
     }
 
@@ -1223,55 +1221,64 @@ public partial class Form1 : Form, IMessageFilter
 
     private void FillArea(Point point)
     {
-        int targetColor = canvasBitmap.GetPixel(point.X, point.Y).ToArgb();
-        int replacementColor = currentColor.ToArgb();
-        if (targetColor == replacementColor) return;
-        SaveUndoState();
         int width = canvasBitmap.Width;
         int height = canvasBitmap.Height;
         Rectangle bounds = new(0, 0, width, height);
+        using Bitmap composite = RenderLayers(currentDocument);
+        int[] visiblePixels = new int[width * height];
+        BitmapData visibleData = composite.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            for (int y = 0; y < height; y++)
+                Marshal.Copy(IntPtr.Add(visibleData.Scan0, y * visibleData.Stride), visiblePixels, y * width, width);
+        }
+        finally { composite.UnlockBits(visibleData); }
+        int start = point.Y * width + point.X;
+        int targetColor = visiblePixels[start];
+        int replacementColor = currentColor.ToArgb();
+        if (targetColor == replacementColor) return;
+        bool[] visited = new bool[visiblePixels.Length];
+        Queue<int> pending = new();
+        List<int> area = new();
+        pending.Enqueue(start);
+        visited[start] = true;
+        static bool SimilarColor(int color, int target)
+        {
+            Color first = Color.FromArgb(color);
+            Color second = Color.FromArgb(target);
+            const int tolerance = 128;
+            return Math.Abs(first.A - second.A) <= tolerance
+                && Math.Abs(first.R - second.R) <= tolerance
+                && Math.Abs(first.G - second.G) <= tolerance
+                && Math.Abs(first.B - second.B) <= tolerance;
+        }
+        while (pending.Count > 0)
+        {
+            int index = pending.Dequeue();
+            area.Add(index);
+            int x = index % width;
+            int y = index / width;
+            void Visit(int index)
+            {
+                if (visited[index] || !SimilarColor(visiblePixels[index], targetColor)) return;
+                visited[index] = true;
+                pending.Enqueue(index);
+            }
+            if (x > 0) Visit(index - 1);
+            if (x < width - 1) Visit(index + 1);
+            if (y > 0) Visit(index - width);
+            if (y < height - 1) Visit(index + width);
+        }
+        SaveUndoState();
         BitmapData data = canvasBitmap.LockBits(bounds, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
         try
         {
-            int[] pixels = new int[width * height];
+            int[] activePixels = new int[width * height];
             for (int y = 0; y < height; y++)
-                Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), pixels, y * width, width);
-
-            // Mark pixels when enqueuing, so each pixel is visited once. No recursion.
-            Queue<int> pending = new();
-            int start = point.Y * width + point.X;
-            pixels[start] = replacementColor;
-            pending.Enqueue(start);
-            static bool SimilarColor(int color, int target)
-            {
-                Color first = Color.FromArgb(color);
-                Color second = Color.FromArgb(target);
-                // Anti-aliased outlines contain a wide gray fringe. Keep only the dark
-                // core as a barrier so the light dotted fringe becomes part of the fill.
-                const int tolerance = 128;
-                return Math.Abs(first.A - second.A) <= tolerance
-                    && Math.Abs(first.R - second.R) <= tolerance
-                    && Math.Abs(first.G - second.G) <= tolerance
-                    && Math.Abs(first.B - second.B) <= tolerance;
-            }
-            void Visit(int index)
-            {
-                if (!SimilarColor(pixels[index], targetColor)) return;
-                pixels[index] = replacementColor;
-                pending.Enqueue(index);
-            }
-            while (pending.Count > 0)
-            {
-                int index = pending.Dequeue();
-                int x = index % width;
-                int y = index / width;
-                if (x > 0) Visit(index - 1);
-                if (x < width - 1) Visit(index + 1);
-                if (y > 0) Visit(index - width);
-                if (y < height - 1) Visit(index + width);
-            }
+                Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), activePixels, y * width, width);
+            foreach (int index in area) activePixels[index] = replacementColor;
             for (int y = 0; y < height; y++)
-                Marshal.Copy(pixels, y * width, IntPtr.Add(data.Scan0, y * data.Stride), width);
+                Marshal.Copy(activePixels, y * width, IntPtr.Add(data.Scan0, y * data.Stride), width);
         }
         finally { canvasBitmap.UnlockBits(data); }
         canvasPictureBox.Invalidate();
@@ -1487,7 +1494,7 @@ public partial class Form1 : Form, IMessageFilter
                 Size canvasSize = GetNewCanvasSize();
                 loadedCanvas = new Bitmap(canvasSize.Width, canvasSize.Height, PixelFormat.Format32bppArgb);
                 using Graphics graphics = Graphics.FromImage(loadedCanvas);
-                graphics.Clear(Color.White);
+                graphics.Clear(Color.Transparent);
                 graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 float scale = Math.Min((float)loadedCanvas.Width / image.Width, (float)loadedCanvas.Height / image.Height);
                 int width = Math.Max(1, (int)(image.Width * scale));
