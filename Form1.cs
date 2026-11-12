@@ -50,6 +50,11 @@ public partial class Form1 : Form, IMessageFilter
     private bool isCroppingPaste;
     private Rectangle pasteCropBounds;
     private bool constrainShape;
+    private bool layerShortcutPending;
+    private DateTime layerShortcutDeadline;
+    private CanvasResizeMode canvasResizeMode;
+    private Size canvasResizeStartSize;
+    private Size canvasResizePreviewSize;
     private TextBox? inlineTextEditor;
     private Font? inlineTextFont;
     private Rectangle inlineTextBounds;
@@ -445,6 +450,32 @@ public partial class Form1 : Form, IMessageFilter
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        Keys keyCode = keyData & Keys.KeyCode;
+        if (layerShortcutPending)
+        {
+            layerShortcutPending = false;
+            if (DateTime.UtcNow <= layerShortcutDeadline)
+            {
+                if (keyCode is Keys.Oemplus or Keys.Add)
+                {
+                    MoveActiveLayer(1);
+                    return true;
+                }
+                if (keyCode is Keys.OemMinus or Keys.Subtract)
+                {
+                    MoveActiveLayer(-1);
+                    return true;
+                }
+            }
+            UpdateStatus();
+        }
+        if (keyData == (Keys.Control | Keys.L))
+        {
+            layerShortcutPending = true;
+            layerShortcutDeadline = DateTime.UtcNow.AddSeconds(3);
+            toolStatusLabel.Text = "Слои: нажмите + для перемещения вверх или − для перемещения вниз";
+            return true;
+        }
         if (pastedBitmap != null && isCroppingPaste && keyData == Keys.Escape)
         {
             CancelPasteCrop();
@@ -588,6 +619,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         if (e.Button != MouseButtons.Left || isDrawing || isPanning) return;
         if (sender == canvasPanel && currentTool != ToolType.Mouse) return;
+        if (sender == canvasPictureBox && pastedBitmap == null && BeginCanvasResize(e.Location)) return;
         if (pastedBitmap != null)
         {
             Point point = ClampPoint(ToCanvasPoint(e.Location));
@@ -693,6 +725,11 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Canvas_MouseMove(object? sender, MouseEventArgs e)
     {
+        if (canvasResizeMode != CanvasResizeMode.None)
+        {
+            UpdateCanvasResize(e.Location);
+            return;
+        }
         if (isPanning)
         {
             UpdateCanvasPan(sender, e);
@@ -718,6 +755,13 @@ public partial class Form1 : Form, IMessageFilter
         }
         if (!isDrawing)
         {
+            CanvasResizeMode resizeHandle = HitTestCanvasResizeHandle(e.Location);
+            if (resizeHandle != CanvasResizeMode.None)
+            {
+                canvasPictureBox.Cursor = resizeHandle == CanvasResizeMode.Both
+                    ? Cursors.SizeNWSE : resizeHandle == CanvasResizeMode.Width ? Cursors.SizeWE : Cursors.SizeNS;
+                return;
+            }
             if (currentTool is ToolType.Selection or ToolType.Lasso)
                 canvasPictureBox.Cursor = IsPointInSelection(canvasPoint) ? Cursors.SizeAll : Cursors.Cross;
             if (currentTool is ToolType.Pencil or ToolType.Eraser) canvasPictureBox.Invalidate();
@@ -749,6 +793,12 @@ public partial class Form1 : Form, IMessageFilter
 
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)
     {
+        if (e.Button == MouseButtons.Left && canvasResizeMode != CanvasResizeMode.None)
+        {
+            UpdateCanvasResize(e.Location);
+            FinishCanvasResize();
+            return;
+        }
         if (e.Button == MouseButtons.Left && isDraggingPaste)
         {
             Canvas_MouseMove(sender, e);
@@ -837,6 +887,7 @@ public partial class Form1 : Form, IMessageFilter
             e.Graphics.ScaleTransform(ZoomFactor, ZoomFactor);
             foreach (CanvasLayer layer in currentDocument.Layers)
                 e.Graphics.DrawImageUnscaled(layer.Bitmap, Point.Empty);
+            DrawCanvasResizeHandles(e.Graphics);
             DrawCanvasPreview(e.Graphics);
             DrawBrushPreview(e.Graphics);
         }

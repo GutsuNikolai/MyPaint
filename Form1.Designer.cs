@@ -377,6 +377,11 @@ partial class Form1
         {
             if (!canvasPictureBox.Capture && !isPanning)
             {
+                if (canvasResizeMode != CanvasResizeMode.None)
+                {
+                    CancelCanvasResize();
+                    return;
+                }
                 if (pastedBitmap != null) isDraggingPaste = false;
                 else FinishDrawing();
             }

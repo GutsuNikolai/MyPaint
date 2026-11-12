@@ -226,11 +226,13 @@ public partial class Form1
         $"Не удалось выполнить операцию с буфером обмена.\n{exception.Message}", "MyPaint",
         MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-    private Bitmap CreateFittedBitmap(Image image)
+    private Bitmap CreateFittedBitmap(Image image, bool fitToCanvas = false)
     {
-        float scale = Math.Min(1f, Math.Min((float)canvasBitmap.Width / image.Width,
-            (float)canvasBitmap.Height / image.Height));
-        Size size = new(Math.Max(1, (int)(image.Width * scale)), Math.Max(1, (int)(image.Height * scale)));
+        float scale = fitToCanvas
+            ? Math.Min(1f, Math.Min((float)canvasBitmap.Width / image.Width,
+                (float)canvasBitmap.Height / image.Height)) : 1f;
+        Size size = new(Math.Max(1, (int)Math.Round(image.Width * scale)),
+            Math.Max(1, (int)Math.Round(image.Height * scale)));
         Bitmap bitmap = new(size.Width, size.Height, PixelFormat.Format32bppArgb);
         using Graphics graphics = Graphics.FromImage(bitmap);
         if (size == image.Size) graphics.DrawImageUnscaled(image, Point.Empty);
@@ -246,8 +248,8 @@ public partial class Form1
     }
 
     private Point ClampImageLocation(Point location, Size size) => new(
-        Math.Clamp(location.X, 0, canvasBitmap.Width - size.Width),
-        Math.Clamp(location.Y, 0, canvasBitmap.Height - size.Height));
+        Math.Clamp(location.X, 0, Math.Max(0, canvasBitmap.Width - size.Width)),
+        Math.Clamp(location.Y, 0, Math.Max(0, canvasBitmap.Height - size.Height)));
 
     private void FinishPaste(bool commit)
     {
@@ -260,7 +262,10 @@ public partial class Form1
         canvasPictureBox.Capture = false;
         if (commit)
         {
-            SaveUndoState();
+            Size requiredSize = new(Math.Max(canvasBitmap.Width, pasteBounds.Right),
+                Math.Max(canvasBitmap.Height, pasteBounds.Bottom));
+            if (requiredSize != canvasBitmap.Size) ResizeAllLayers(requiredSize, true);
+            else SaveUndoState();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
             graphics.DrawImage(image, pasteBounds);
@@ -402,7 +407,7 @@ public partial class Form1
         }
         using Bitmap image = CopySelectedPixels(selection);
         image.RotateFlip(transform);
-        using Bitmap selectionImage = CreateFittedBitmap(image);
+        using Bitmap selectionImage = CreateFittedBitmap(image, fitToCanvas: true);
         Rectangle destination = new(ClampImageLocation(selection.Location, selectionImage.Size), selectionImage.Size);
         SaveUndoState();
         using Graphics graphics = Graphics.FromImage(canvasBitmap);
