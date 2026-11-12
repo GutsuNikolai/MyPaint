@@ -47,16 +47,24 @@ public partial class Form1
         FinishDrawing();
         if (currentDocument.Selection.IsEmpty) return;
         Rectangle bounds = currentDocument.Selection;
-        Bitmap cropped = new(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-        using (Graphics graphics = Graphics.FromImage(cropped))
+        SaveUndoState();
+        List<CanvasLayer> croppedLayers = new();
+        foreach (CanvasLayer layer in currentDocument.Layers)
         {
-            graphics.Clear(Color.White);
+            Bitmap cropped = new(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
+            using Graphics graphics = Graphics.FromImage(cropped);
             graphics.TranslateTransform(-bounds.X, -bounds.Y);
             if (currentDocument.SelectionPath != null) graphics.SetClip(currentDocument.SelectionPath);
-            graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
+            graphics.DrawImageUnscaled(layer.Bitmap, Point.Empty);
+            croppedLayers.Add(new CanvasLayer(layer.Name, cropped));
         }
-        SaveUndoState();
-        ReplaceCanvas(cropped);
+        foreach (CanvasLayer layer in currentDocument.Layers) layer.Dispose();
+        currentDocument.Layers.Clear();
+        currentDocument.Layers.AddRange(croppedLayers);
+        ClearSelection();
+        UpdateCanvasLayout();
+        UpdateLayersMenu();
+        canvasPictureBox.Invalidate();
     }
 
     private void DrawBrushPreview(Graphics graphics)

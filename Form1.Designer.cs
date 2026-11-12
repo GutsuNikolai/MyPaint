@@ -22,6 +22,7 @@ partial class Form1
     private ToolStripMenuItem cropMenuItem = null!;
     private ToolStripMenuItem copyImageMenuItem = null!;
     private ToolStripMenuItem cutImageMenuItem = null!;
+    private ToolStripMenuItem layersMenuItem = null!;
     private Label widthLabel = null!;
     private NumericUpDown widthInput = null!;
     private TrackBar widthSlider = null!;
@@ -118,7 +119,7 @@ partial class Form1
         viewMenu.DropDownItems.Add(gridMenuItem);
         menu.Items.AddRange(new ToolStripItem[]
         {
-            fileMenu, editMenu, CreateImageMenu(), viewMenu,
+            fileMenu, editMenu, CreateImageMenu(), viewMenu, CreateLayersMenu(),
             new ToolStripMenuItem("Settings", null, Settings_Click)
         });
         foreach (ToolStripItem item in menu.Items) item.Padding = new Padding(12, 6, 12, 6);

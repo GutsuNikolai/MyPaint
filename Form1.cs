@@ -24,8 +24,8 @@ public partial class Form1 : Form, IMessageFilter
         get => currentDocument.Bitmap;
         set => currentDocument.Bitmap = value;
     }
-    private Stack<Bitmap> undoStack => currentDocument.UndoStack;
-    private Stack<Bitmap> redoStack => currentDocument.RedoStack;
+    private Stack<DrawingState> undoStack => currentDocument.UndoStack;
+    private Stack<DrawingState> redoStack => currentDocument.RedoStack;
     private readonly Dictionary<ToolType, ToolStripButton> toolButtons = new();
     private ToolType currentTool = ToolType.Pencil;
     private Color currentColor = Color.Black;
@@ -174,7 +174,7 @@ public partial class Form1 : Form, IMessageFilter
     {
         currentDocument = document;
         wheelRemainder = 0;
-        canvasPictureBox.Image = canvasBitmap;
+        canvasPictureBox.Image = null;
         UpdateCanvasLayout();
         foreach (var pair in documentTabs)
             pair.Value.Checked = pair.Key == document;
@@ -183,6 +183,8 @@ public partial class Form1 : Form, IMessageFilter
         UpdateDocumentTitle();
         UpdateHistoryButtons();
         UpdateSelectionButtons();
+        UpdateLayersMenu();
+        UpdateStatus();
     }
 
     public bool PreFilterMessage(ref Message message)
@@ -303,7 +305,13 @@ public partial class Form1 : Form, IMessageFilter
     {
         if (!documents.Contains(document)) return;
         if (document == currentDocument) FinishDrawing();
-        AddDocument((Bitmap)document.Bitmap.Clone(), isCopy: true);
+        if (!AddDocument((Bitmap)document.Layers[0].Bitmap.Clone(), isCopy: true)) return;
+        currentDocument.Layers[0].Name = document.Layers[0].Name;
+        for (int i = 1; i < document.Layers.Count; i++)
+            currentDocument.Layers.Add(document.Layers[i].Clone());
+        currentDocument.ActiveLayerIndex = Math.Clamp(document.ActiveLayerIndex, 0, currentDocument.Layers.Count - 1);
+        UpdateLayersMenu();
+        canvasPictureBox.Invalidate();
     }
 
     private bool CloseDocument(DrawingDocument document)
@@ -375,7 +383,7 @@ public partial class Form1 : Form, IMessageFilter
         ActiveControl = null;
         if (!currentDocument.Selection.IsEmpty)
         {
-            if (tool == ToolType.Eraser) PaintSelection(Color.White);
+            if (tool == ToolType.Eraser) PaintSelection(EraserColor);
             else if (tool == ToolType.Fill) PaintSelection(currentColor);
             else if (tool is not (ToolType.Selection or ToolType.Lasso)) ClearSelection();
         }
@@ -540,7 +548,7 @@ public partial class Form1 : Form, IMessageFilter
     private void UpdateStatus()
     {
         toolStatusLabel.Text = pastedBitmap != null ? "Вставка: перетащите, Enter — применить, Esc — отменить"
-            : inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool == ToolType.Eyedropper ? "Пипетка" : currentTool == ToolType.Lasso ? "Лассо" : currentTool)}"
+            : inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool == ToolType.Eyedropper ? "Пипетка" : currentTool == ToolType.Lasso ? "Лассо" : currentTool)} | Слой: {currentDocument.Layers[currentDocument.ActiveLayerIndex].Name}"
             : "Текст: Ctrl+Enter — применить, Esc — отменить";
         Color statusColor = currentTool == ToolType.Text ? textColor : currentColor;
         colorStatusLabel.Text = $"Цвет: #{statusColor.R:X2}{statusColor.G:X2}{statusColor.B:X2}";
@@ -557,12 +565,19 @@ public partial class Form1 : Form, IMessageFilter
 
     private Pen CreateDrawingPen()
     {
-        return new Pen(currentTool == ToolType.Eraser ? Color.White : currentColor, brushWidth)
+        return new Pen(currentTool == ToolType.Eraser ? EraserColor : currentColor, brushWidth)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
             LineJoin = LineJoin.Round
         };
+    }
+
+    private static Color EraserColor => Color.Transparent;
+
+    private void ConfigureEraseMode(Graphics graphics, Color color)
+    {
+        if (color.A == 0) graphics.CompositingMode = CompositingMode.SourceCopy;
     }
 
     private Point ClampPoint(Point point) => new(
@@ -615,7 +630,8 @@ public partial class Form1 : Form, IMessageFilter
         startPoint = lastPoint = ClampPoint(ToCanvasPoint(e.Location));
         if (currentTool == ToolType.Eyedropper)
         {
-            currentColor = canvasBitmap.GetPixel(startPoint.X, startPoint.Y);
+            using Bitmap composite = RenderLayers(currentDocument);
+            currentColor = composite.GetPixel(startPoint.X, startPoint.Y);
             SelectTool(ToolType.Pencil);
             return;
         }
@@ -627,7 +643,7 @@ public partial class Form1 : Form, IMessageFilter
         }
         if (currentTool == ToolType.Eraser && !currentDocument.Selection.IsEmpty)
         {
-            PaintSelection(Color.White);
+            PaintSelection(EraserColor);
             return;
         }
         if (currentTool is ToolType.Selection or ToolType.Lasso && IsPointInSelection(startPoint))
@@ -666,7 +682,9 @@ public partial class Form1 : Form, IMessageFilter
             // A dot also makes a single click a valid drawing action.
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using Brush brush = new SolidBrush(currentTool == ToolType.Eraser ? Color.White : currentColor);
+            Color color = currentTool == ToolType.Eraser ? EraserColor : currentColor;
+            ConfigureEraseMode(graphics, color);
+            using Brush brush = new SolidBrush(color);
             graphics.FillEllipse(brush, startPoint.X - brushWidth / 2f,
                 startPoint.Y - brushWidth / 2f, brushWidth, brushWidth);
             canvasPictureBox.Invalidate();
@@ -720,6 +738,7 @@ public partial class Form1 : Form, IMessageFilter
         {
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            if (currentTool == ToolType.Eraser) ConfigureEraseMode(graphics, EraserColor);
             using Pen pen = CreateDrawingPen();
             graphics.DrawLine(pen, lastPoint, point);
         }
@@ -764,14 +783,16 @@ public partial class Form1 : Form, IMessageFilter
             {
                 SaveUndoState();
                 using Graphics graphics = Graphics.FromImage(canvasBitmap);
+                ConfigureEraseMode(graphics, EraserColor);
+                using Brush eraseBrush = new SolidBrush(EraserColor);
                 if (currentDocument.SelectionPath != null)
                 {
-                    graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
+                    graphics.FillPath(eraseBrush, currentDocument.SelectionPath);
                     using Matrix matrix = new();
                     matrix.Translate(moveDestination.X - moveSource.X, moveDestination.Y - moveSource.Y);
                     currentDocument.SelectionPath.Transform(matrix);
                 }
-                else graphics.FillRectangle(Brushes.White, moveSource);
+                else graphics.FillRectangle(eraseBrush, moveSource);
                 graphics.DrawImageUnscaled(movingBitmap, moveDestination.Location);
             }
             currentDocument.Selection = moveDestination;
@@ -814,6 +835,8 @@ public partial class Form1 : Form, IMessageFilter
         try
         {
             e.Graphics.ScaleTransform(ZoomFactor, ZoomFactor);
+            foreach (CanvasLayer layer in currentDocument.Layers)
+                e.Graphics.DrawImageUnscaled(layer.Bitmap, Point.Empty);
             DrawCanvasPreview(e.Graphics);
             DrawBrushPreview(e.Graphics);
         }
@@ -1070,6 +1093,7 @@ public partial class Form1 : Form, IMessageFilter
         if (currentDocument.Selection.IsEmpty) return;
         SaveUndoState();
         using Graphics graphics = Graphics.FromImage(canvasBitmap);
+        ConfigureEraseMode(graphics, color);
         using Brush brush = new SolidBrush(color);
         if (currentDocument.SelectionPath != null) graphics.FillPath(brush, currentDocument.SelectionPath);
         else graphics.FillRectangle(brush, currentDocument.Selection);
@@ -1079,7 +1103,7 @@ public partial class Form1 : Form, IMessageFilter
     private void EraseSelection_Click(object? sender, EventArgs e)
     {
         FinishDrawing();
-        PaintSelection(Color.White);
+        PaintSelection(EraserColor);
     }
 
     private void DrawShape(Graphics graphics, Point first, Point second)
@@ -1200,18 +1224,19 @@ public partial class Form1 : Form, IMessageFilter
         canvasPictureBox.Invalidate();
     }
 
-    private static void DisposeHistory(Stack<Bitmap> history)
+    private static void DisposeHistory(Stack<DrawingState> history)
     {
         while (history.Count > 0) history.Pop().Dispose();
     }
 
-    private static void PushHistory(Stack<Bitmap> history, Stack<long> versions, Bitmap bitmap, long version)
+    private static void PushHistory(Stack<DrawingState> history, Stack<long> versions,
+        DrawingState state, long version)
     {
-        history.Push(bitmap);
+        history.Push(state);
         versions.Push(version);
         if (history.Count <= HistoryLimit) return;
         // Stack.ToArray returns the newest state first. Remove only the oldest.
-        Bitmap[] states = history.ToArray();
+        DrawingState[] states = history.ToArray();
         long[] stateVersions = versions.ToArray();
         states[^1].Dispose();
         history.Clear();
@@ -1225,7 +1250,8 @@ public partial class Form1 : Form, IMessageFilter
 
     private void SaveUndoState()
     {
-        PushHistory(undoStack, currentDocument.UndoVersions, (Bitmap)canvasBitmap.Clone(), currentDocument.CurrentVersion);
+        PushHistory(undoStack, currentDocument.UndoVersions,
+            currentDocument.CaptureState(), currentDocument.CurrentVersion);
         DisposeHistory(redoStack);
         currentDocument.RedoVersions.Clear();
         currentDocument.CurrentVersion = ++currentDocument.LastVersion;
@@ -1238,7 +1264,7 @@ public partial class Form1 : Form, IMessageFilter
         Bitmap previous = canvasBitmap;
         canvasBitmap = bitmap;
         ClearSelection();
-        canvasPictureBox.Image = canvasBitmap;
+        canvasPictureBox.Image = null;
         UpdateCanvasLayout();
         previous.Dispose();
         canvasPictureBox.Invalidate();
@@ -1275,8 +1301,16 @@ public partial class Form1 : Form, IMessageFilter
         }
         FinishDrawing();
         if (undoStack.Count == 0) return;
-        PushHistory(redoStack, currentDocument.RedoVersions, (Bitmap)canvasBitmap.Clone(), currentDocument.CurrentVersion);
-        ReplaceCanvas(undoStack.Pop());
+        PushHistory(redoStack, currentDocument.RedoVersions,
+            currentDocument.CaptureState(), currentDocument.CurrentVersion);
+        DrawingState state = undoStack.Pop();
+        currentDocument.RestoreState(state);
+        state.Dispose();
+        ClearSelection();
+        UpdateCanvasLayout();
+        UpdateLayersMenu();
+        UpdateStatus();
+        canvasPictureBox.Invalidate();
         currentDocument.CurrentVersion = currentDocument.UndoVersions.Pop();
         UpdateDocumentTitle();
         UpdateHistoryButtons();
@@ -1287,8 +1321,16 @@ public partial class Form1 : Form, IMessageFilter
         FinishPaste(false);
         FinishDrawing();
         if (redoStack.Count == 0) return;
-        PushHistory(undoStack, currentDocument.UndoVersions, (Bitmap)canvasBitmap.Clone(), currentDocument.CurrentVersion);
-        ReplaceCanvas(redoStack.Pop());
+        PushHistory(undoStack, currentDocument.UndoVersions,
+            currentDocument.CaptureState(), currentDocument.CurrentVersion);
+        DrawingState state = redoStack.Pop();
+        currentDocument.RestoreState(state);
+        state.Dispose();
+        ClearSelection();
+        UpdateCanvasLayout();
+        UpdateLayersMenu();
+        UpdateStatus();
+        canvasPictureBox.Invalidate();
         currentDocument.CurrentVersion = currentDocument.RedoVersions.Pop();
         UpdateDocumentTitle();
         UpdateHistoryButtons();
@@ -1331,27 +1373,24 @@ public partial class Form1 : Form, IMessageFilter
         FinishDrawing();
         Size size = newSettings.CanvasWidth == 0 ? GetWindowCanvasSize()
             : new Size(newSettings.CanvasWidth, newSettings.CanvasHeight);
-        Bitmap? resized = null;
-        try
+        if (canvasBitmap.Size != size)
         {
-            if (canvasBitmap.Size != size)
+            SaveUndoState();
+            foreach (CanvasLayer layer in currentDocument.Layers)
             {
-                resized = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
+                Bitmap resized = new(size.Width, size.Height, PixelFormat.Format32bppArgb);
                 using Graphics graphics = Graphics.FromImage(resized);
-                graphics.Clear(Color.White);
-                graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
+                graphics.DrawImageUnscaled(layer.Bitmap, Point.Empty);
+                layer.Bitmap.Dispose();
+                layer.Bitmap = resized;
             }
-            Directory.CreateDirectory(newSettings.SaveFolder);
-            newSettings.Save();
-            if (resized != null)
-            {
-                SaveUndoState();
-                ReplaceCanvas(resized);
-                resized = null;
-            }
-            settings = newSettings;
+            ClearSelection();
+            UpdateCanvasLayout();
+            canvasPictureBox.Invalidate();
         }
-        finally { resized?.Dispose(); }
+        Directory.CreateDirectory(newSettings.SaveFolder);
+        newSettings.Save();
+        settings = newSettings;
     }
 
     private void Clear_Click(object? sender, EventArgs e)
@@ -1362,7 +1401,7 @@ public partial class Form1 : Form, IMessageFilter
         SaveUndoState();
         ClearSelection();
         using Graphics graphics = Graphics.FromImage(canvasBitmap);
-        graphics.Clear(Color.White);
+        graphics.Clear(Color.Transparent);
         canvasPictureBox.Invalidate();
     }
 
@@ -1465,7 +1504,8 @@ public partial class Form1 : Form, IMessageFilter
                 ".png" => ImageFormat.Png,
                 _ => throw new InvalidOperationException("Выберите расширение PNG, JPG или BMP.")
             };
-            document.Bitmap.Save(filePath, format);
+            using Bitmap image = RenderLayers(document);
+            image.Save(filePath, format);
             document.FilePath = filePath;
             document.SavedVersion = document.CurrentVersion;
             UpdateDocumentTitle();

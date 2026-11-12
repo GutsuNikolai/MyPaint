@@ -118,7 +118,7 @@ public partial class Form1
         {
             using Bitmap image = CopySelectedPixels(bounds);
             PutBitmapOnClipboard(image);
-            if (cut) PaintSelection(Color.White);
+            if (cut) PaintSelection(EraserColor);
         }
         catch (ExternalException exception)
         {
@@ -391,28 +391,32 @@ public partial class Form1
         }
         FinishDrawing();
         Rectangle selection = currentDocument.Selection;
-        using Bitmap image = selection.IsEmpty ? (Bitmap)canvasBitmap.Clone() : CopySelectedPixels(selection);
-        image.RotateFlip(transform);
         if (selection.IsEmpty)
         {
             SaveUndoState();
-            ReplaceCanvas((Bitmap)image.Clone());
-        }
-        else
-        {
-            using Bitmap fitted = CreateFittedBitmap(image);
-            Rectangle destination = new(ClampImageLocation(selection.Location, fitted.Size), fitted.Size);
-            SaveUndoState();
-            using Graphics graphics = Graphics.FromImage(canvasBitmap);
-            if (currentDocument.SelectionPath != null) graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
-            else graphics.FillRectangle(Brushes.White, selection);
-            graphics.DrawImageUnscaled(fitted, destination.Location);
-            currentDocument.SelectionPath?.Dispose();
-            currentDocument.SelectionPath = null;
-            currentDocument.Selection = destination;
-            UpdateSelectionButtons();
+            foreach (CanvasLayer layer in currentDocument.Layers) layer.Bitmap.RotateFlip(transform);
+            ClearSelection();
+            UpdateCanvasLayout();
             canvasPictureBox.Invalidate();
+            return;
         }
+        using Bitmap image = CopySelectedPixels(selection);
+        image.RotateFlip(transform);
+        using Bitmap selectionImage = CreateFittedBitmap(image);
+        Rectangle destination = new(ClampImageLocation(selection.Location, selectionImage.Size), selectionImage.Size);
+        SaveUndoState();
+        using Graphics graphics = Graphics.FromImage(canvasBitmap);
+        ConfigureEraseMode(graphics, EraserColor);
+        using Brush eraseBrush = new SolidBrush(EraserColor);
+        if (currentDocument.SelectionPath != null) graphics.FillPath(eraseBrush, currentDocument.SelectionPath);
+        else graphics.FillRectangle(eraseBrush, selection);
+        graphics.CompositingMode = CompositingMode.SourceOver;
+        graphics.DrawImageUnscaled(selectionImage, destination.Location);
+        currentDocument.SelectionPath?.Dispose();
+        currentDocument.SelectionPath = null;
+        currentDocument.Selection = destination;
+        UpdateSelectionButtons();
+        canvasPictureBox.Invalidate();
     }
 
     private Point ConstrainShapePoint(Point first, Point second)
