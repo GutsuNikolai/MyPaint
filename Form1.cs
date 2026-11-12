@@ -30,6 +30,7 @@ public partial class Form1 : Form, IMessageFilter
     private ToolType currentTool = ToolType.Pencil;
     private Color currentColor = Color.Black;
     private int brushWidth = 3;
+    private bool showPixelGrid;
     private bool isDrawing;
     private bool isPanning;
     private Point panAnchor;
@@ -38,6 +39,7 @@ public partial class Form1 : Form, IMessageFilter
     private Bitmap? movingBitmap;
     private Rectangle moveSource;
     private Rectangle moveDestination;
+    private GraphicsPath? drawingLassoPath;
     private Bitmap? pastedBitmap;
     private Rectangle pasteBounds;
     private Point pasteDragOffset;
@@ -100,6 +102,7 @@ public partial class Form1 : Form, IMessageFilter
             button.Size = new Size((int)(44 * scale), (int)(40 * scale));
             button.Margin = new Padding((int)(3 * scale), 0, (int)(3 * scale), 0);
         }
+        shapesButton.Size = new Size((int)(120 * scale), (int)(40 * scale));
     }
 
     private int CanvasMargin => (int)(20 * DeviceDpi / 96f);
@@ -152,7 +155,7 @@ public partial class Form1 : Form, IMessageFilter
             pageContextMenu.Show(tab.Owner!, new Point(tab.Bounds.X + e.X, tab.Bounds.Y + e.Y));
         };
         documentTabs.Add(document, tab);
-        MainMenuStrip!.Items.Add(tab);
+        pageStrip.Items.Add(tab);
         ActivateDocument(document);
         return true;
     }
@@ -317,7 +320,7 @@ public partial class Form1 : Form, IMessageFilter
             currentDocument = null!;
         }
         ToolStripMenuItem tab = documentTabs[document];
-        MainMenuStrip!.Items.Remove(tab);
+        pageStrip.Items.Remove(tab);
         documentTabs.Remove(document);
         documents.RemoveAt(index);
         if (contextDocument == document) contextDocument = null;
@@ -352,6 +355,7 @@ public partial class Form1 : Form, IMessageFilter
             pair.Value.ToolTipText = $"{path}{(pair.Key.HasUnsavedChanges ? " — есть изменения" : "")}";
         }
         MainMenuStrip!.Invalidate();
+        pageStrip.Invalidate();
     }
 
     private void SetBrushWidth(int width)
@@ -362,6 +366,7 @@ public partial class Form1 : Form, IMessageFilter
         widthInput.Value = width;
         widthSlider.Value = width;
         UpdateStatus();
+        canvasPictureBox.Invalidate();
     }
 
     private void SelectTool(ToolType tool)
@@ -373,10 +378,18 @@ public partial class Form1 : Form, IMessageFilter
         {
             if (tool == ToolType.Eraser) PaintSelection(Color.White);
             else if (tool == ToolType.Fill) PaintSelection(currentColor);
-            else if (tool != ToolType.Selection) ClearSelection();
+            else if (tool is not (ToolType.Selection or ToolType.Lasso)) ClearSelection();
         }
         foreach (var pair in toolButtons)
             pair.Value.Checked = pair.Key == tool;
+        foreach (var pair in shapeButtons)
+        {
+            bool selected = pair.Key == tool;
+            pair.Value.BackColor = selected ? UiTheme.Accent : UiTheme.Surface;
+            pair.Value.FlatAppearance.BorderSize = selected ? 1 : 0;
+        }
+        if (IsShapeTool(tool)) shapesButton.Image = shapeButtons[tool].Image;
+        shapesButton.ToolTipText = IsShapeTool(tool) ? $"Фигура: {ShapeName(tool)}" : "Выбрать фигуру";
         if (tool == ToolType.Text) ShowTextOptions();
         else textOptionsWindow.Hide();
         canvasPictureBox.Cursor = tool == ToolType.Mouse ? Cursors.Default : tool == ToolType.Text ? Cursors.IBeam
@@ -420,6 +433,7 @@ public partial class Form1 : Form, IMessageFilter
         ToolType.Fill => Keys.F,
         ToolType.Eyedropper => Keys.I,
         ToolType.Selection => Keys.S,
+        ToolType.Lasso => Keys.K,
         _ => Keys.None
     };
 
@@ -463,6 +477,11 @@ public partial class Form1 : Form, IMessageFilter
             else CopyImage(keyData == (Keys.Control | Keys.X));
             return true;
         }
+        if (keyData == (Keys.Control | Keys.G))
+        {
+            TogglePixelGrid();
+            return true;
+        }
         if (keyData == (Keys.Control | Keys.Z))
         {
             Undo_Click(this, EventArgs.Empty);
@@ -498,12 +517,14 @@ public partial class Form1 : Form, IMessageFilter
                 EraseSelection_Click(this, EventArgs.Empty);
                 return true;
             }
-            if (keyData == Keys.Escape && (isDrawing && currentTool == ToolType.Selection || !currentDocument.Selection.IsEmpty))
+            if (keyData == Keys.Escape && (isDrawing && currentTool is ToolType.Selection or ToolType.Lasso || !currentDocument.Selection.IsEmpty))
             {
-                if (currentTool == ToolType.Selection)
+                if (currentTool is ToolType.Selection or ToolType.Lasso)
                 {
                     isDrawing = false;
                     canvasPictureBox.Capture = false;
+                    drawingLassoPath?.Dispose();
+                    drawingLassoPath = null;
                 }
                 ClearSelection();
                 return true;
@@ -521,13 +542,18 @@ public partial class Form1 : Form, IMessageFilter
     private void UpdateStatus()
     {
         toolStatusLabel.Text = pastedBitmap != null ? "Вставка: перетащите, Enter — применить, Esc — отменить"
-            : inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool == ToolType.Eyedropper ? "Пипетка" : currentTool)}"
+            : inlineTextEditor == null ? $"Инструмент: {(currentTool == ToolType.Mouse ? "Мышь" : currentTool == ToolType.Eyedropper ? "Пипетка" : currentTool == ToolType.Lasso ? "Лассо" : currentTool)}"
             : "Текст: Ctrl+Enter — применить, Esc — отменить";
         Color statusColor = currentTool == ToolType.Text ? textColor : currentColor;
         colorStatusLabel.Text = $"Цвет: #{statusColor.R:X2}{statusColor.G:X2}{statusColor.B:X2}";
         widthStatusLabel.Text = $"Толщина: {brushWidth} px";
         widthLabel.Text = $"{brushWidth} px";
         colorButton.SampleColor = currentColor;
+        foreach (ColorPaletteButton button in palettePanel.Controls.OfType<ColorPaletteButton>())
+        {
+            button.IsSelected = button.PaletteColor.ToArgb() == currentColor.ToArgb();
+            button.Invalidate();
+        }
         UpdateTextColorButtons();
     }
 
@@ -608,13 +634,30 @@ public partial class Form1 : Form, IMessageFilter
             PaintSelection(Color.White);
             return;
         }
-        if (currentTool == ToolType.Selection && currentDocument.Selection.Contains(startPoint))
+        if (currentTool is ToolType.Selection or ToolType.Lasso && IsPointInSelection(startPoint))
         {
             moveSource = moveDestination = currentDocument.Selection;
-            movingBitmap = canvasBitmap.Clone(moveSource, PixelFormat.Format32bppArgb);
+            if (currentDocument.SelectionPath != null)
+            {
+                movingBitmap = new Bitmap(moveSource.Width, moveSource.Height, PixelFormat.Format32bppArgb);
+                using Graphics graphics = Graphics.FromImage(movingBitmap);
+                graphics.TranslateTransform(-moveSource.X, -moveSource.Y);
+                graphics.SetClip(currentDocument.SelectionPath);
+                graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
+            }
+            else movingBitmap = canvasBitmap.Clone(moveSource, PixelFormat.Format32bppArgb);
             isDrawing = true;
             canvasPictureBox.Capture = true;
             canvasPictureBox.Cursor = Cursors.SizeAll;
+            return;
+        }
+        if (currentTool == ToolType.Lasso)
+        {
+            ClearSelection();
+            drawingLassoPath = new GraphicsPath();
+            drawingLassoPath.AddLine(startPoint, startPoint);
+            isDrawing = true;
+            canvasPictureBox.Capture = true;
             return;
         }
         if (currentTool == ToolType.Selection) ClearSelection();
@@ -661,8 +704,9 @@ public partial class Form1 : Form, IMessageFilter
         }
         if (!isDrawing)
         {
-            if (currentTool == ToolType.Selection)
-                canvasPictureBox.Cursor = currentDocument.Selection.Contains(canvasPoint) ? Cursors.SizeAll : Cursors.Cross;
+            if (currentTool is ToolType.Selection or ToolType.Lasso)
+                canvasPictureBox.Cursor = IsPointInSelection(canvasPoint) ? Cursors.SizeAll : Cursors.Cross;
+            if (currentTool is ToolType.Pencil or ToolType.Eraser) canvasPictureBox.Invalidate();
             return;
         }
         if (movingBitmap != null)
@@ -674,7 +718,9 @@ public partial class Form1 : Form, IMessageFilter
             return;
         }
         Point point = ClampPoint(canvasPoint);
-        if (currentTool is ToolType.Pencil or ToolType.Eraser)
+        if (currentTool == ToolType.Lasso && drawingLassoPath != null)
+            drawingLassoPath.AddLine(lastPoint, point);
+        else if (currentTool is ToolType.Pencil or ToolType.Eraser)
         {
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -722,7 +768,14 @@ public partial class Form1 : Form, IMessageFilter
             {
                 SaveUndoState();
                 using Graphics graphics = Graphics.FromImage(canvasBitmap);
-                graphics.FillRectangle(Brushes.White, moveSource);
+                if (currentDocument.SelectionPath != null)
+                {
+                    graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
+                    using Matrix matrix = new();
+                    matrix.Translate(moveDestination.X - moveSource.X, moveDestination.Y - moveSource.Y);
+                    currentDocument.SelectionPath.Transform(matrix);
+                }
+                else graphics.FillRectangle(Brushes.White, moveSource);
                 graphics.DrawImageUnscaled(movingBitmap, moveDestination.Location);
             }
             currentDocument.Selection = moveDestination;
@@ -735,7 +788,17 @@ public partial class Form1 : Form, IMessageFilter
             currentDocument.Selection = GetSelectionBounds();
             UpdateSelectionButtons();
         }
-        if (currentTool is ToolType.Line or ToolType.Rectangle or ToolType.Ellipse)
+        else if (currentTool == ToolType.Lasso && drawingLassoPath != null)
+        {
+            drawingLassoPath.CloseFigure();
+            currentDocument.SelectionPath?.Dispose();
+            currentDocument.SelectionPath = (GraphicsPath)drawingLassoPath.Clone();
+            currentDocument.Selection = Rectangle.Round(drawingLassoPath.GetBounds());
+            drawingLassoPath.Dispose();
+            drawingLassoPath = null;
+            UpdateSelectionButtons();
+        }
+        if (IsShapeTool(currentTool))
         {
             SaveUndoState();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
@@ -756,18 +819,26 @@ public partial class Form1 : Form, IMessageFilter
         {
             e.Graphics.ScaleTransform(ZoomFactor, ZoomFactor);
             DrawCanvasPreview(e.Graphics);
+            DrawBrushPreview(e.Graphics);
         }
         finally { e.Graphics.Restore(state); }
+        if (showPixelGrid && ZoomFactor >= 4) DrawPixelGrid(e.Graphics, e.ClipRectangle);
     }
 
     private void DrawCanvasPreview(Graphics graphics)
     {
         // The preview is temporary; the completed shape is stored in the Bitmap.
-        if (isDrawing && currentTool is ToolType.Line or ToolType.Rectangle or ToolType.Ellipse)
+        if (isDrawing && IsShapeTool(currentTool))
             DrawShape(graphics, startPoint, lastPoint);
+        if (isDrawing && currentTool == ToolType.Lasso && drawingLassoPath != null)
+        {
+            using Pen lasso = new(Color.Black, 1 / ZoomFactor) { DashStyle = DashStyle.Dash };
+            graphics.DrawPath(lasso, drawingLassoPath);
+        }
         if (movingBitmap != null)
         {
-            graphics.FillRectangle(Brushes.White, moveSource);
+            if (currentDocument.SelectionPath != null) graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
+            else graphics.FillRectangle(Brushes.White, moveSource);
             graphics.DrawImageUnscaled(movingBitmap, moveDestination.Location);
         }
         if (pastedBitmap != null)
@@ -778,7 +849,23 @@ public partial class Form1 : Form, IMessageFilter
         Rectangle selection = pastedBitmap != null ? pasteBounds : movingBitmap != null ? moveDestination
             : isDrawing && currentTool is ToolType.Selection or ToolType.Text
                 ? GetSelectionBounds() : currentDocument.Selection;
-        if (!selection.IsEmpty)
+        if (movingBitmap != null && currentDocument.SelectionPath != null)
+        {
+            using GraphicsPath movingPath = (GraphicsPath)currentDocument.SelectionPath.Clone();
+            using Matrix matrix = new();
+            matrix.Translate(moveDestination.X - moveSource.X, moveDestination.Y - moveSource.Y);
+            movingPath.Transform(matrix);
+            using Pen border = new(Color.Black, 1 / ZoomFactor) { DashStyle = DashStyle.Dash };
+            graphics.DrawPath(border, movingPath);
+        }
+        else if (!selection.IsEmpty && currentDocument.SelectionPath != null && movingBitmap == null)
+        {
+            using Brush shade = new SolidBrush(Color.FromArgb(45, Color.Gray));
+            graphics.FillPath(shade, currentDocument.SelectionPath);
+            using Pen border = new(Color.Black, 1 / ZoomFactor) { DashStyle = DashStyle.Dash };
+            graphics.DrawPath(border, currentDocument.SelectionPath);
+        }
+        else if (!selection.IsEmpty)
         {
             // The selection overlay belongs only to the preview, never to the saved Bitmap.
             using Brush shade = new SolidBrush(Color.FromArgb(45, Color.Gray));
@@ -966,7 +1053,9 @@ public partial class Form1 : Form, IMessageFilter
 
     private void UpdateSelectionButtons()
     {
-        eraseSelectionButton.Enabled = eraseSelectionMenuItem.Enabled = !currentDocument.Selection.IsEmpty;
+        bool hasSelection = !currentDocument.Selection.IsEmpty;
+        eraseSelectionButton.Enabled = eraseSelectionMenuItem.Enabled = hasSelection;
+        cropButton.Enabled = cropMenuItem.Enabled = hasSelection;
         copyImageMenuItem.Enabled = cutImageMenuItem.Enabled = pastedBitmap != null || !currentDocument.Selection.IsEmpty
             || inlineTextEditor != null;
     }
@@ -974,6 +1063,8 @@ public partial class Form1 : Form, IMessageFilter
     private void ClearSelection()
     {
         currentDocument.Selection = Rectangle.Empty;
+        currentDocument.SelectionPath?.Dispose();
+        currentDocument.SelectionPath = null;
         UpdateSelectionButtons();
         canvasPictureBox.Invalidate();
     }
@@ -984,7 +1075,8 @@ public partial class Form1 : Form, IMessageFilter
         SaveUndoState();
         using Graphics graphics = Graphics.FromImage(canvasBitmap);
         using Brush brush = new SolidBrush(color);
-        graphics.FillRectangle(brush, currentDocument.Selection);
+        if (currentDocument.SelectionPath != null) graphics.FillPath(brush, currentDocument.SelectionPath);
+        else graphics.FillRectangle(brush, currentDocument.Selection);
         canvasPictureBox.Invalidate();
     }
 
@@ -996,18 +1088,43 @@ public partial class Form1 : Form, IMessageFilter
 
     private void DrawShape(Graphics graphics, Point first, Point second)
     {
-        if (constrainShape && currentTool is ToolType.Rectangle or ToolType.Ellipse)
+        if (constrainShape && IsShapeTool(currentTool))
             second = ConstrainShapePoint(first, second);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using Pen pen = CreateDrawingPen();
+        if (currentTool == ToolType.Line)
+        {
+            graphics.DrawLine(pen, first, second);
+            return;
+        }
         Rectangle bounds = new(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y),
             Math.Abs(first.X - second.X), Math.Abs(first.Y - second.Y));
-        if (currentTool == ToolType.Line)
-            graphics.DrawLine(pen, first, second);
-        else if (bounds.Width > 0 && bounds.Height > 0)
+        if (bounds.Width > 0 && bounds.Height > 0)
         {
             if (currentTool == ToolType.Rectangle) graphics.DrawRectangle(pen, bounds);
             else if (currentTool == ToolType.Ellipse) graphics.DrawEllipse(pen, bounds);
+            else if (currentTool == ToolType.RoundedRectangle)
+            {
+                using GraphicsPath path = UiTheme.RoundedRectangle(bounds, Math.Min(bounds.Width, bounds.Height) / 5);
+                graphics.DrawPath(pen, path);
+            }
+            else
+            {
+                PointF P(float x, float y) => new(bounds.X + x * bounds.Width, bounds.Y + y * bounds.Height);
+                PointF[] points = currentTool switch
+                {
+                    ToolType.Triangle => new[] { P(.5f, 0), P(1, 1), P(0, 1) },
+                    ToolType.RightTriangle => new[] { P(0, 0), P(0, 1), P(1, 1) },
+                    ToolType.Diamond => new[] { P(.5f, 0), P(1, .5f), P(.5f, 1), P(0, .5f) },
+                    ToolType.Pentagon => RegularPolygon(bounds, 5),
+                    ToolType.Hexagon => RegularPolygon(bounds, 6),
+                    ToolType.Star => StarPoints(bounds),
+                    ToolType.RightArrow => new[] { P(0, .3f), P(.55f, .3f), P(.55f, 0), P(1, .5f), P(.55f, 1), P(.55f, .7f), P(0, .7f) },
+                    ToolType.LeftArrow => new[] { P(1, .3f), P(.45f, .3f), P(.45f, 0), P(0, .5f), P(.45f, 1), P(.45f, .7f), P(1, .7f) },
+                    _ => Array.Empty<PointF>()
+                };
+                if (points.Length > 1) graphics.DrawPolygon(pen, points);
+            }
         }
     }
 
@@ -1138,7 +1255,7 @@ public partial class Form1 : Form, IMessageFilter
         canvasPictureBox.Size = displaySize;
         canvasPictureBox.Location = new Point(CanvasMargin, CanvasMargin);
         SetCanvasScrollPosition(previousScroll.X, previousScroll.Y);
-        zoomStatusLabel.Text = $"Масштаб: {ZoomLevels[currentDocument.ZoomIndex]}%";
+        UpdateGridStatus();
         canvasPanel.Invalidate();
     }
 

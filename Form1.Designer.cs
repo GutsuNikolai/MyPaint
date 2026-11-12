@@ -6,13 +6,20 @@ partial class Form1
     private System.ComponentModel.IContainer? components;
     private PictureBox canvasPictureBox = null!;
     private Panel canvasPanel = null!;
+    private MenuStrip pageStrip = null!;
+    private ToolStripDropDownButton shapesButton = null!;
+    private readonly Dictionary<ToolType, Button> shapeButtons = new();
+    private ToolStripMenuItem gridMenuItem = null!;
     private ColorSampleButton colorButton = null!;
+    private FlowLayoutPanel palettePanel = null!;
     private ToolStripButton undoButton = null!;
     private ToolStripButton redoButton = null!;
     private ToolStripMenuItem undoMenuItem = null!;
     private ToolStripMenuItem redoMenuItem = null!;
     private ToolStripButton eraseSelectionButton = null!;
     private ToolStripMenuItem eraseSelectionMenuItem = null!;
+    private ToolStripButton cropButton = null!;
+    private ToolStripMenuItem cropMenuItem = null!;
     private ToolStripMenuItem copyImageMenuItem = null!;
     private ToolStripMenuItem cutImageMenuItem = null!;
     private Label widthLabel = null!;
@@ -44,6 +51,8 @@ partial class Form1
             Application.RemoveMessageFilter(this);
             isDrawing = false;
             FinishInlineText(false);
+            drawingLassoPath?.Dispose();
+            drawingLassoPath = null;
             movingBitmap?.Dispose();
             movingBitmap = null;
             pastedBitmap?.Dispose();
@@ -103,15 +112,25 @@ partial class Form1
         {
             undoMenuItem, redoMenuItem, new ToolStripSeparator(), eraseSelectionMenuItem
         });
+        gridMenuItem = new ToolStripMenuItem("Пиксельная сетка (Ctrl+G)");
+        gridMenuItem.Click += (_, _) => TogglePixelGrid();
+        ToolStripMenuItem viewMenu = new("View");
+        viewMenu.DropDownItems.Add(gridMenuItem);
         menu.Items.AddRange(new ToolStripItem[]
         {
-            fileMenu, editMenu, CreateImageMenu(),
-            new ToolStripMenuItem("Settings", null, Settings_Click), new ToolStripSeparator()
+            fileMenu, editMenu, CreateImageMenu(), viewMenu,
+            new ToolStripMenuItem("Settings", null, Settings_Click)
         });
         foreach (ToolStripItem item in menu.Items) item.Padding = new Padding(12, 6, 12, 6);
         fileMenu.DropDown.Renderer = new PageMenuRenderer();
         fileMenu.DropDown.BackColor = UiTheme.Surface;
         MainMenuStrip = menu;
+        pageStrip = new MenuStrip
+        {
+            Dock = DockStyle.Top, Renderer = new PageMenuRenderer(),
+            BackColor = UiTheme.Background, ForeColor = UiTheme.Text,
+            Font = Font, Padding = new Padding(12, 1, 12, 1), ShowItemToolTips = true
+        };
         pageContextMenu = new ContextMenuStrip(components)
         {
             Renderer = new PageMenuRenderer(), BackColor = UiTheme.Surface, Font = Font
@@ -131,11 +150,60 @@ partial class Form1
             BackColor = UiTheme.Surface, Font = Font, Renderer = new PageMenuRenderer(),
             ImageScalingSize = new Size(24, 24)
         };
+        Image shapesIcon = ToolIcons.Create("Rectangle");
+        toolbarImages.Add(shapesIcon);
+        shapesButton = new ToolStripDropDownButton("Фигуры", shapesIcon)
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+            AutoSize = false, Size = new Size(120, 40), ToolTipText = "Выбрать фигуру", AutoToolTip = false
+        };
+        TableLayoutPanel shapesGrid = new()
+        {
+            ColumnCount = 4, RowCount = 3, Size = new Size(232, 166),
+            BackColor = UiTheme.Surface, Padding = new Padding(6)
+        };
+        for (int i = 0; i < 4; i++) shapesGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        for (int i = 0; i < 3; i++) shapesGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / 3));
+        ToolTip shapeTips = new(components);
+        ToolType[] availableShapes =
+        {
+            ToolType.Line, ToolType.Rectangle, ToolType.RoundedRectangle, ToolType.Ellipse,
+            ToolType.Triangle, ToolType.RightTriangle, ToolType.Diamond, ToolType.Pentagon,
+            ToolType.Hexagon, ToolType.Star, ToolType.RightArrow, ToolType.LeftArrow
+        };
+        for (int i = 0; i < availableShapes.Length; i++)
+        {
+            ToolType shape = availableShapes[i];
+            Image icon = ToolIcons.Create(shape.ToString());
+            toolbarImages.Add(icon);
+            Button button = new()
+            {
+                Dock = DockStyle.Fill, Image = icon, FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(2), BackColor = UiTheme.Surface, Cursor = Cursors.Hand, TabStop = false
+            };
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = UiTheme.Hover;
+            button.FlatAppearance.MouseDownBackColor = UiTheme.Pressed;
+            shapeTips.SetToolTip(button, ShapeName(shape));
+            button.Click += (_, _) => { shapesButton.HideDropDown(); SelectTool(shape); };
+            shapesGrid.Controls.Add(button, i % 4, i / 4);
+            shapeButtons.Add(shape, button);
+        }
+        shapesButton.DropDownItems.Add(new ToolStripControlHost(shapesGrid)
+        {
+            AutoSize = false, Size = shapesGrid.Size, Padding = Padding.Empty, Margin = Padding.Empty
+        });
+        if (shapesButton.DropDown is ToolStripDropDownMenu palette) palette.ShowImageMargin = false;
         foreach (ToolType tool in Enum.GetValues<ToolType>())
         {
+            if (IsShapeTool(tool))
+            {
+                if (!toolbar.Items.Contains(shapesButton)) toolbar.Items.Add(shapesButton);
+                continue;
+            }
             string toolCaption = tool == ToolType.Mouse ? "Мышь" : tool == ToolType.Eyedropper ? "Пипетка"
                 : tool == ToolType.Text ? "Plain Text"
-                : tool == ToolType.Selection ? "Select Area" : tool.ToString();
+                : tool == ToolType.Selection ? "Select Area" : tool == ToolType.Lasso ? "Lasso" : tool.ToString();
             ToolStripButton button = CreateToolbarButton(toolCaption, tool.ToString(), GetToolHotkey(tool).ToString());
             if (tool == ToolType.Mouse)
                 button.ToolTipText = "Мышь — V\nПеретаскивайте холст левой кнопкой для перемещения вида";
@@ -149,6 +217,8 @@ partial class Form1
         undoButton.Click += Undo_Click;
         redoButton = CreateToolbarButton("Redo", "Redo", "Ctrl+Y");
         redoButton.Click += Redo_Click;
+        cropButton = CreateToolbarButton("Crop Selection", "Crop", "Обрезать по выделению");
+        cropButton.Click += CropSelection_Click;
         eraseSelectionButton = CreateToolbarButton("Erase Selection", "Erase Selection", "Del");
         eraseSelectionButton.Click += EraseSelection_Click;
         ToolStripButton clearButton = CreateToolbarButton("Clear", "Clear", "Очистить холст");
@@ -156,7 +226,7 @@ partial class Form1
         toolbar.Items.AddRange(new ToolStripItem[]
         {
             new ToolStripSeparator(), clearButton,
-            new ToolStripSeparator(), undoButton, redoButton, new ToolStripSeparator(), eraseSelectionButton
+            new ToolStripSeparator(), undoButton, redoButton, new ToolStripSeparator(), cropButton, eraseSelectionButton
         });
 
         FlowLayoutPanel widthPanel = new()
@@ -190,6 +260,18 @@ partial class Form1
         };
         UiTheme.StyleButton(colorButton);
         colorButton.Click += Color_Click;
+        palettePanel = new FlowLayoutPanel
+        {
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(10, 0, 0, 0), Padding = new Padding(0, 4, 0, 0),
+            WrapContents = false, BackColor = Color.Transparent
+        };
+        foreach (Color color in new[] { Color.Black, Color.White, Color.Red, Color.Blue, Color.Green, Color.Yellow, Color.Orange })
+        {
+            ColorPaletteButton colorButtonItem = new(color);
+            colorButtonItem.Click += (_, _) => { currentColor = colorButtonItem.PaletteColor; UpdateStatus(); };
+            palettePanel.Controls.Add(colorButtonItem);
+        }
         textFontSizeLabel = new()
         {
             Text = "Размер (px):", AutoSize = true, Margin = new Padding(8, 5, 8, 0)
@@ -260,7 +342,7 @@ partial class Form1
         textOptionsWindow = new TextOptionsForm(textOptionsPanel, ProcessTextOptionsKey);
         widthPanel.Controls.AddRange(new Control[]
         {
-            caption, widthInput, widthSlider, widthLabel, colorButton
+            caption, widthInput, widthSlider, widthLabel, colorButton, palettePanel
         });
 
         canvasPanel = new()
@@ -297,7 +379,11 @@ partial class Form1
                 else FinishDrawing();
             }
         };
-        canvasPictureBox.MouseLeave += (_, _) => coordinatesStatusLabel.Text = "X: —, Y: —";
+        canvasPictureBox.MouseLeave += (_, _) =>
+        {
+            coordinatesStatusLabel.Text = "X: —, Y: —";
+            canvasPictureBox.Invalidate();
+        };
 
         StatusStrip status = new()
         {
@@ -317,6 +403,7 @@ partial class Form1
         Controls.Add(canvasPanel);
         Controls.Add(widthPanel);
         Controls.Add(toolbar);
+        Controls.Add(pageStrip);
         Controls.Add(menu);
         Controls.Add(status);
         ResumeLayout(true);

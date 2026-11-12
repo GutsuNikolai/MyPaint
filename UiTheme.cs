@@ -105,3 +105,34 @@ internal sealed class ColorSampleButton : Button
         if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(edge, -4, -4));
     }
 }
+
+internal sealed class ColorPaletteButton : Button
+{
+    public Color PaletteColor { get; }
+    public bool IsSelected { get; set; }
+
+    public ColorPaletteButton(Color color)
+    {
+        PaletteColor = color;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        AutoSize = false;
+        Size = new Size(24, 24);
+        Margin = new Padding(2, 0, 2, 0);
+        Cursor = Cursors.Hand;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(UiTheme.Background);
+        Rectangle bounds = new(2, 2, Width - 5, Height - 5);
+        if (IsSelected)
+        {
+            using Pen selected = new(UiTheme.AccentBorder, 2);
+            e.Graphics.DrawRectangle(selected, 0, 0, Width - 1, Height - 1);
+        }
+        using Brush brush = new SolidBrush(PaletteColor);
+        e.Graphics.FillRectangle(brush, bounds);
+        using Pen border = new(UiTheme.Border);
+        e.Graphics.DrawRectangle(border, bounds);
+    }
+}

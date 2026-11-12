@@ -73,10 +73,12 @@ public partial class Form1
         {
             ShortcutKeyDisplayString = "Ctrl+X", Enabled = false
         };
+        cropMenuItem = new ToolStripMenuItem("Crop selection", null, CropSelection_Click) { Enabled = false };
         menu.DropDownItems.AddRange(new ToolStripItem[]
         {
             copyImageMenuItem, cutImageMenuItem,
             new ToolStripMenuItem("Paste", null, PasteImage_Click) { ShortcutKeyDisplayString = "Ctrl+V" },
+            cropMenuItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Rotate 90° clockwise", null, (_, _) => TransformImage(RotateFlipType.Rotate90FlipNone)),
             new ToolStripMenuItem("Rotate 90° counterclockwise", null, (_, _) => TransformImage(RotateFlipType.Rotate270FlipNone)),
@@ -114,7 +116,7 @@ public partial class Form1
         if (bounds.IsEmpty) return;
         try
         {
-            using Bitmap image = canvasBitmap.Clone(bounds, PixelFormat.Format32bppArgb);
+            using Bitmap image = CopySelectedPixels(bounds);
             PutBitmapOnClipboard(image);
             if (cut) PaintSelection(Color.White);
         }
@@ -122,6 +124,18 @@ public partial class Form1
         {
             ShowClipboardError(exception);
         }
+    }
+
+    private Bitmap CopySelectedPixels(Rectangle bounds)
+    {
+        if (currentDocument.SelectionPath == null)
+            return canvasBitmap.Clone(bounds, PixelFormat.Format32bppArgb);
+        Bitmap image = new(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
+        using Graphics graphics = Graphics.FromImage(image);
+        graphics.TranslateTransform(-bounds.X, -bounds.Y);
+        graphics.SetClip(currentDocument.SelectionPath);
+        graphics.DrawImageUnscaled(canvasBitmap, Point.Empty);
+        return image;
     }
 
     private static void PutBitmapOnClipboard(Bitmap image)
@@ -378,8 +392,7 @@ public partial class Form1
         }
         FinishDrawing();
         Rectangle selection = currentDocument.Selection;
-        using Bitmap image = selection.IsEmpty ? (Bitmap)canvasBitmap.Clone()
-            : canvasBitmap.Clone(selection, PixelFormat.Format32bppArgb);
+        using Bitmap image = selection.IsEmpty ? (Bitmap)canvasBitmap.Clone() : CopySelectedPixels(selection);
         image.RotateFlip(transform);
         if (selection.IsEmpty)
         {
@@ -392,8 +405,11 @@ public partial class Form1
             Rectangle destination = new(ClampImageLocation(selection.Location, fitted.Size), fitted.Size);
             SaveUndoState();
             using Graphics graphics = Graphics.FromImage(canvasBitmap);
-            graphics.FillRectangle(Brushes.White, selection);
+            if (currentDocument.SelectionPath != null) graphics.FillPath(Brushes.White, currentDocument.SelectionPath);
+            else graphics.FillRectangle(Brushes.White, selection);
             graphics.DrawImageUnscaled(fitted, destination.Location);
+            currentDocument.SelectionPath?.Dispose();
+            currentDocument.SelectionPath = null;
             currentDocument.Selection = destination;
             UpdateSelectionButtons();
             canvasPictureBox.Invalidate();
@@ -402,6 +418,16 @@ public partial class Form1
 
     private Point ConstrainShapePoint(Point first, Point second)
     {
+        int deltaX = second.X - first.X;
+        int deltaY = second.Y - first.Y;
+        if (currentTool == ToolType.Line)
+        {
+            double length = Math.Sqrt((double)deltaX * deltaX + (double)deltaY * deltaY);
+            double angle = Math.Round(Math.Atan2(deltaY, deltaX) / (Math.PI / 12)) * (Math.PI / 12);
+            return ClampPoint(new Point(
+                (int)Math.Round(first.X + length * Math.Cos(angle)),
+                (int)Math.Round(first.Y + length * Math.Sin(angle))));
+        }
         int directionX = second.X < first.X ? -1 : 1;
         int directionY = second.Y < first.Y ? -1 : 1;
         int side = Math.Max(Math.Abs(second.X - first.X), Math.Abs(second.Y - first.Y));
@@ -413,7 +439,7 @@ public partial class Form1
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.ShiftKey && isDrawing && currentTool is ToolType.Rectangle or ToolType.Ellipse)
+        if (e.KeyCode == Keys.ShiftKey && isDrawing && IsShapeTool(currentTool))
         {
             constrainShape = true;
             canvasPictureBox.Invalidate();
@@ -423,7 +449,7 @@ public partial class Form1
 
     protected override void OnKeyUp(KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.ShiftKey && isDrawing && currentTool is ToolType.Rectangle or ToolType.Ellipse)
+        if (e.KeyCode == Keys.ShiftKey && isDrawing && IsShapeTool(currentTool))
         {
             constrainShape = false;
             canvasPictureBox.Invalidate();

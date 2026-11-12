@@ -8,8 +8,18 @@ public enum ToolType
     Line,
     Rectangle,
     Ellipse,
+    RoundedRectangle,
+    Triangle,
+    RightTriangle,
+    Diamond,
+    Pentagon,
+    Hexagon,
+    Star,
+    RightArrow,
+    LeftArrow,
     Text,
     Fill,
     Eyedropper,
-    Selection
+    Selection,
+    Lasso
 }

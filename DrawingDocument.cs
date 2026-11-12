@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace Paint;
 
 // Each tab owns its image, history and save location.
@@ -7,6 +9,7 @@ internal sealed class DrawingDocument : IDisposable
     public Bitmap Bitmap { get; set; }
     public string? FilePath { get; set; }
     public Rectangle Selection { get; set; }
+    public GraphicsPath? SelectionPath { get; set; }
     public int ZoomIndex { get; set; } = 4; // 100% in the zoom level list.
     // History remembers versions so Undo can return to the saved state.
     public long CurrentVersion { get; set; }
@@ -28,6 +31,7 @@ internal sealed class DrawingDocument : IDisposable
     public void Dispose()
     {
         Bitmap.Dispose();
+        SelectionPath?.Dispose();
         while (UndoStack.Count > 0) UndoStack.Pop().Dispose();
         while (RedoStack.Count > 0) RedoStack.Pop().Dispose();
         UndoVersions.Clear();
